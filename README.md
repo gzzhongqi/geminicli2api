@@ -11,6 +11,8 @@ app_port: 7860
 
 # Gemini CLI to API Proxy (geminicli2api)
 
+[![Mentioned in Awesome Gemini CLI](https://awesome.re/mentioned-badge.svg)](https://github.com/Piebald-AI/awesome-gemini-cli)
+
 A FastAPI-based proxy server that converts the Gemini CLI tool into both OpenAI-compatible and native Gemini API endpoints. This allows you to leverage Google's free Gemini API quota through familiar OpenAI API interfaces or direct Gemini API calls.
 
 ## 🚀 Features
