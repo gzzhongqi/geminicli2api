@@ -14,7 +14,9 @@ from .config import (
     is_search_model,
     get_base_model_name,
     get_thinking_budget,
-    should_include_thoughts
+    should_include_thoughts,
+    is_nothinking_model,
+    is_maxthinking_model
 )
 
 
@@ -202,7 +204,39 @@ def openai_request_to_gemini(openai_request: OpenAIChatCompletionRequest) -> Dic
     
     if "gemini-2.5-flash-image" not in openai_request.model:
         # Add thinking configuration for thinking models
-        thinking_budget = get_thinking_budget(openai_request.model)
+        thinking_budget = None
+        
+        # Check if model is an explicit thinking variant (nothinking or maxthinking)
+        if is_nothinking_model(openai_request.model) or is_maxthinking_model(openai_request.model):
+            # For explicit thinking variants, ignore reasoning_effort and use variant-specific budget
+            thinking_budget = get_thinking_budget(openai_request.model)
+        else:
+            # For regular models, check if reasoning_effort was provided in the request
+            reasoning_effort = getattr(openai_request, 'reasoning_effort', None)
+            if reasoning_effort:
+                base_model = get_base_model_name(openai_request.model)
+                if reasoning_effort == "minimal":
+                    # Use same budget as nothinking variants
+                    if "gemini-2.5-flash" in base_model:
+                        thinking_budget = 0
+                    elif "gemini-2.5-pro" in base_model or "gemini-3-pro" in base_model:
+                        thinking_budget = 128
+                elif reasoning_effort == "low":
+                    thinking_budget = 1000
+                elif reasoning_effort == "medium":
+                    thinking_budget = -1
+                elif reasoning_effort == "high":
+                    # Use same budget as maxthinking variants
+                    if "gemini-2.5-flash" in base_model:
+                        thinking_budget = 24576
+                    elif "gemini-2.5-pro" in base_model:
+                        thinking_budget = 32768
+                    elif "gemini-3-pro" in base_model:
+                        thinking_budget = 45000
+            else:
+                # No reasoning_effort provided, use default thinking budget
+                thinking_budget = get_thinking_budget(openai_request.model)
+        
         if thinking_budget is not None:
             request_payload["generationConfig"]["thinkingConfig"] = {
                 "thinkingBudget": thinking_budget,
