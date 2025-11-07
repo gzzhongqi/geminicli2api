@@ -145,6 +145,19 @@ BASE_MODELS = [
         "maxTemperature": 2.0,
         "topP": 0.95,
         "topK": 64
+    },
+    {
+        "name": "models/gemini-3-pro-preview-11-2025",
+        "version": "001",
+        "displayName": "Gemini 3.0 Pro Preview 11-2025",
+        "description": "Preview version of Gemini 3.0 Pro from November 2025",
+        "inputTokenLimit": 1048576,
+        "outputTokenLimit": 65535,
+        "supportedGenerationMethods": ["generateContent", "streamGenerateContent"],
+        "temperature": 1.0,
+        "maxTemperature": 2.0,
+        "topP": 0.95,
+        "topK": 64
     }
 ]
 
@@ -254,11 +267,15 @@ def get_thinking_budget(model_name):
             return 0  # No thinking for flash
         elif "gemini-2.5-pro" in base_model:
             return 128  # Limited thinking for pro
+        elif "gemini-3-pro" in base_model:
+            return 128  # Limited thinking for pro
     elif is_maxthinking_model(model_name):
         if "gemini-2.5-flash" in base_model:
             return 24576
         elif "gemini-2.5-pro" in base_model:
             return 32768
+        elif "gemini-3-pro" in base_model:
+            return 45000
     else:
         # Default thinking budget for regular models
         return -1  # Default for all models
@@ -269,7 +286,7 @@ def should_include_thoughts(model_name):
     if is_nothinking_model(model_name):
         # For nothinking mode, still include thoughts if it's a pro model
         base_model = get_base_model_name(model_name)
-        return "gemini-2.5-pro" in base_model
+        return "gemini-2.5-pro" in base_model or "gemini-3-pro" in base_model
     else:
         # For all other modes, include thoughts
         return True

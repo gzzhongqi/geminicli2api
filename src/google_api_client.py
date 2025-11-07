@@ -322,7 +322,7 @@ def build_gemini_payload_from_native(native_request: dict, model_from_path: str)
         include_thoughts = should_include_thoughts(model_from_path)
     
         native_request["generationConfig"]["thinkingConfig"]["includeThoughts"] = include_thoughts
-        if "thinkingBudget" in native_request["generationConfig"]["thinkingConfig"] and thinking_budget == -1:
+        if "thinkingBudget" in native_request["generationConfig"]["thinkingConfig"]:
             pass
         else:
             native_request["generationConfig"]["thinkingConfig"]["thinkingBudget"] = thinking_budget

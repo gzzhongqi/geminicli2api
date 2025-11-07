@@ -65,15 +65,20 @@ def openai_request_to_gemini(openai_request: OpenAIChatCompletionRequest) -> Dic
                                 try:
                                     header, base64_data = url.split(",", 1)
                                     # header looks like: data:image/png;base64
-                                    mime_type = "image/png"
+                                    mime_type = ""
                                     if ":" in header:
-                                        mime_type = header.split(":", 1)[1].split(";", 1)[0] or "image/png"
-                                    parts.append({
-                                        "inlineData": {
-                                            "mimeType": mime_type,
-                                            "data": base64_data
-                                        }
-                                    })
+                                        mime_type = header.split(":", 1)[1].split(";", 1)[0] or ""
+                                    # Only convert to inlineData if it's an image
+                                    if mime_type.startswith("image/"):
+                                        parts.append({
+                                            "inlineData": {
+                                                "mimeType": mime_type,
+                                                "data": base64_data
+                                            }
+                                        })
+                                    else:
+                                        # Non-image data URIs: keep as markdown text
+                                        parts.append({"text": text_value[m.start():m.end()]})
                                 except Exception:
                                     # Fallback: keep original markdown as text if parsing fails
                                     parts.append({"text": text_value[m.start():m.end()]})
@@ -122,15 +127,20 @@ def openai_request_to_gemini(openai_request: OpenAIChatCompletionRequest) -> Dic
                     try:
                         header, base64_data = url.split(",", 1)
                         # header looks like: data:image/png;base64
-                        mime_type = "image/png"
+                        mime_type = ""
                         if ":" in header:
-                            mime_type = header.split(":", 1)[1].split(";", 1)[0] or "image/png"
-                        parts.append({
-                            "inlineData": {
-                                "mimeType": mime_type,
-                                "data": base64_data
-                            }
-                        })
+                            mime_type = header.split(":", 1)[1].split(";", 1)[0] or ""
+                        # Only convert to inlineData if it's an image
+                        if mime_type.startswith("image/"):
+                            parts.append({
+                                "inlineData": {
+                                    "mimeType": mime_type,
+                                    "data": base64_data
+                                }
+                            })
+                        else:
+                            # Non-image data URIs: keep as markdown text
+                            parts.append({"text": text[m.start():m.end()]})
                     except Exception:
                         # Fallback: keep original markdown as text if parsing fails
                         parts.append({"text": text[m.start():m.end()]})
