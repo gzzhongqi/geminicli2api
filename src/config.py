@@ -37,7 +37,8 @@ DEFAULT_SAFETY_SETTINGS = [
     {"category": "HARM_CATEGORY_IMAGE_HARASSMENT", "threshold": "BLOCK_NONE"},
     {"category": "HARM_CATEGORY_IMAGE_HATE", "threshold": "BLOCK_NONE"},
     {"category": "HARM_CATEGORY_IMAGE_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-    {"category": "HARM_CATEGORY_UNSPECIFIED", "threshold": "BLOCK_NONE"}
+    {"category": "HARM_CATEGORY_UNSPECIFIED", "threshold": "BLOCK_NONE"},
+    {"category": "HARM_CATEGORY_JAILBREAK", "threshold": "BLOCK_NONE"}
 ]
 
 # Base Models (without search variants)
