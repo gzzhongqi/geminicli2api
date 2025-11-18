@@ -148,7 +148,7 @@ BASE_MODELS = [
         "topK": 64
     },
     {
-        "name": "models/gemini-3-pro-preview-11-2025",
+        "name": "models/gemini-3-pro-preview",
         "version": "001",
         "displayName": "Gemini 3.0 Pro Preview 11-2025",
         "description": "Preview version of Gemini 3.0 Pro from November 2025",
