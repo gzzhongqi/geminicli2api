@@ -92,6 +92,12 @@ async def anthropic_messages(
             f"Anthropic messages request: model={request.model}, stream={request.stream}"
         )
 
+        # Determine if thinking should be included in response
+        # Only include if client explicitly requests it via thinking config
+        include_thinking = (
+            request.thinking is not None and request.thinking.type == "enabled"
+        )
+
         # Transform Anthropic request to Gemini format
         gemini_request_data = anthropic_request_to_gemini(request)
 
@@ -121,7 +127,9 @@ async def anthropic_messages(
                 response = send_gemini_request(gemini_payload, is_streaming=True)
 
                 if isinstance(response, StreamingResponse):
-                    processor = AnthropicStreamProcessor(request.model)
+                    processor = AnthropicStreamProcessor(
+                        request.model, include_thinking
+                    )
                     logging.info(
                         f"Starting Anthropic streaming response: {processor.message_id}"
                     )
@@ -256,7 +264,7 @@ async def anthropic_messages(
                 # Parse Gemini response and transform to Anthropic format
                 gemini_response = json.loads(response.body)
                 anthropic_response = gemini_response_to_anthropic(
-                    gemini_response, request.model
+                    gemini_response, request.model, include_thinking=include_thinking
                 )
 
                 logging.info(

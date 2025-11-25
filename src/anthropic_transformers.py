@@ -4,9 +4,8 @@ This module contains all the logic for transforming requests and responses betwe
 """
 
 import json
-import time
 import uuid
-from typing import Dict, Any, List, Optional, Generator
+from typing import Dict, Any, List
 
 from .schemas import AnthropicMessagesRequest
 from .config import DEFAULT_SAFETY_SETTINGS
@@ -234,7 +233,10 @@ def anthropic_request_to_gemini(
 
 
 def gemini_response_to_anthropic(
-    gemini_response: Dict[str, Any], model: str, input_tokens: int = 0
+    gemini_response: Dict[str, Any],
+    model: str,
+    input_tokens: int = 0,
+    include_thinking: bool = False,
 ) -> Dict[str, Any]:
     """
     Transform a Gemini API response to Anthropic messages format.
@@ -243,6 +245,7 @@ def gemini_response_to_anthropic(
         gemini_response: Response from Gemini API
         model: Model name to include in response
         input_tokens: Estimated input token count
+        include_thinking: Whether to include thinking blocks in response (default False)
 
     Returns:
         Dictionary in Anthropic messages format
@@ -258,10 +261,12 @@ def gemini_response_to_anthropic(
             # Handle text parts
             if part.get("text") is not None:
                 if part.get("thought", False):
-                    # This is thinking content
-                    content_blocks.append(
-                        {"type": "thinking", "thinking": part.get("text", "")}
-                    )
+                    # This is thinking content - only include if explicitly requested
+                    if include_thinking:
+                        content_blocks.append(
+                            {"type": "thinking", "thinking": part.get("text", "")}
+                        )
+                    # Skip thinking blocks if not requested
                 else:
                     # Regular text content
                     content_blocks.append(
@@ -487,8 +492,9 @@ class AnthropicStreamProcessor:
     Maintains state across multiple chunks to properly emit events.
     """
 
-    def __init__(self, model: str):
+    def __init__(self, model: str, include_thinking: bool = False):
         self.model = model
+        self.include_thinking = include_thinking
         self.message_id = f"msg_{uuid.uuid4().hex[:24]}"
         self.current_block_index = -1
         self.current_block_type = None
@@ -527,6 +533,10 @@ class AnthropicStreamProcessor:
                     text = part.get("text", "")
 
                     if not text:
+                        continue
+
+                    # Skip thinking blocks if not requested
+                    if is_thought and not self.include_thinking:
                         continue
 
                     # Determine block type
