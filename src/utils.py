@@ -1,35 +1,49 @@
+"""
+Utility functions for Geminicli2api.
+"""
+
 import platform
+from typing import Any, Dict, Optional
+
 from .config import CLI_VERSION
 
-def get_user_agent():
+
+def get_user_agent() -> str:
     """Generate User-Agent string matching gemini-cli format."""
-    version = CLI_VERSION
     system = platform.system()
     arch = platform.machine()
-    return f"GeminiCLI/{version} ({system}; {arch})"
+    return f"GeminiCLI/{CLI_VERSION} ({system}; {arch})"
 
-def get_platform_string():
+
+def get_platform_string() -> str:
     """Generate platform string matching gemini-cli format."""
     system = platform.system().upper()
     arch = platform.machine().upper()
-    
-    # Map to gemini-cli platform format
-    if system == "DARWIN":
-        if arch in ["ARM64", "AARCH64"]:
-            return "DARWIN_ARM64"
-        else:
-            return "DARWIN_AMD64"
-    elif system == "LINUX":
-        if arch in ["ARM64", "AARCH64"]:
-            return "LINUX_ARM64"
-        else:
-            return "LINUX_AMD64"
-    elif system == "WINDOWS":
-        return "WINDOWS_AMD64"
-    else:
-        return "PLATFORM_UNSPECIFIED"
 
-def get_client_metadata(project_id=None):
+    platform_map = {
+        ("DARWIN", "ARM64"): "DARWIN_ARM64",
+        ("DARWIN", "AARCH64"): "DARWIN_ARM64",
+        ("DARWIN", "X86_64"): "DARWIN_AMD64",
+        ("LINUX", "ARM64"): "LINUX_ARM64",
+        ("LINUX", "AARCH64"): "LINUX_ARM64",
+        ("LINUX", "X86_64"): "LINUX_AMD64",
+        ("WINDOWS", "AMD64"): "WINDOWS_AMD64",
+        ("WINDOWS", "X86_64"): "WINDOWS_AMD64",
+    }
+
+    return platform_map.get((system, arch), f"{system}_AMD64")
+
+
+def get_client_metadata(project_id: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Generate client metadata for API requests.
+
+    Args:
+        project_id: Optional Google Cloud project ID
+
+    Returns:
+        Client metadata dictionary
+    """
     return {
         "ideType": "IDE_UNSPECIFIED",
         "platform": get_platform_string(),
