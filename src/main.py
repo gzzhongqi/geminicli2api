@@ -13,7 +13,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from .anthropic_routes import router as anthropic_router
 from .routes.gemini import router as gemini_router
 from .routes.openai import router as openai_router
-from .services.auth import get_credentials, get_user_project_id, onboard_user
+from .services.auth import (
+    get_credentials,
+    get_user_project_id,
+    initialize_credential_pool,
+    onboard_user,
+)
 from .config import APP_NAME, APP_VERSION, CREDENTIAL_FILE
 
 # Load environment variables
@@ -34,6 +39,25 @@ logger = logging.getLogger(__name__)
 
 def _initialize_credentials() -> None:
     """Initialize credentials on startup."""
+    # First try to initialize credential pool (multi-credential support)
+    pool = initialize_credential_pool()
+    if pool and pool.size() > 0:
+        logger.info(f"Loaded {pool.size()} credential(s) from pool")
+        # Try to onboard with first credential
+        try:
+            result = pool.get_next()
+            if result:
+                entry, _ = result
+                if entry.credentials:
+                    proj_id = get_user_project_id(entry.credentials)
+                    if proj_id:
+                        onboard_user(entry.credentials, proj_id)
+                        logger.info(f"Onboarded with project: {proj_id}")
+        except Exception as e:
+            logger.warning(f"Onboarding skipped: {e}")
+        return
+
+    # Fallback to single credential mode
     env_creds = os.getenv("GEMINI_CREDENTIALS")
     file_exists = os.path.exists(CREDENTIAL_FILE)
 

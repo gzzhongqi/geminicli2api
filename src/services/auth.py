@@ -1177,9 +1177,75 @@ def onboard_user(creds: Credentials, project_id: str) -> None:
         raise Exception(f"Onboarding failed: {error_text}")
 
 
+def _auto_onboard_to_free_tier(creds: Credentials, headers: dict) -> Optional[str]:
+    """
+    Automatically onboard user to free tier and return project ID.
+
+    This is called when loadCodeAssist doesn't return a cloudaicompanionProject,
+    which happens for accounts that haven't selected a tier yet.
+
+    Args:
+        creds: Valid credentials
+        headers: HTTP headers for API calls
+
+    Returns:
+        Project ID if onboarding succeeds, None otherwise
+    """
+    logger.info("Auto-onboarding to free tier...")
+
+    try:
+        # Start onboarding to free-tier
+        onboard_resp = requests.post(
+            f"{CODE_ASSIST_ENDPOINT}/v1internal:onboardUser",
+            json={"tierId": "free-tier", "metadata": get_client_metadata()},
+            headers=headers,
+        )
+        onboard_resp.raise_for_status()
+        logger.debug(f"Onboarding initiated: {onboard_resp.json()}")
+
+        # Poll loadCodeAssist until we get project ID
+        for attempt in range(ONBOARD_MAX_RETRIES):
+            time.sleep(ONBOARD_POLL_INTERVAL)
+
+            resp = requests.post(
+                f"{CODE_ASSIST_ENDPOINT}/v1internal:loadCodeAssist",
+                json={"metadata": get_client_metadata()},
+                headers=headers,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+
+            project_id = data.get("cloudaicompanionProject")
+            if project_id:
+                logger.info(f"Auto-onboarding successful, project ID: {project_id}")
+                return project_id
+
+            # Check if we have currentTier but no project ID yet
+            if data.get("currentTier"):
+                logger.debug(f"Waiting for project ID (attempt {attempt + 1})...")
+            else:
+                logger.debug(
+                    f"Waiting for onboarding to complete (attempt {attempt + 1})..."
+                )
+
+        logger.warning("Auto-onboarding timed out waiting for project ID")
+        return None
+
+    except requests.exceptions.HTTPError as e:
+        error_text = e.response.text if hasattr(e, "response") else str(e)
+        logger.error(f"Auto-onboarding failed: {error_text}")
+        return None
+    except Exception as e:
+        logger.error(f"Auto-onboarding error: {e}")
+        return None
+
+
 def get_user_project_id(creds: Credentials) -> str:
     """
     Get the user's Google Cloud project ID.
+
+    If the account hasn't been onboarded to Gemini Code Assist yet,
+    this will automatically onboard to the free tier.
 
     Args:
         creds: Valid credentials
@@ -1246,8 +1312,17 @@ def get_user_project_id(creds: Credentials) -> str:
         data = resp.json()
 
         discovered = data.get("cloudaicompanionProject")
+
+        # If no project ID, try auto-onboarding to free tier
         if not discovered:
-            raise ValueError("Could not find project ID in API response")
+            logger.info("No project ID in response, attempting auto-onboard...")
+            discovered = _auto_onboard_to_free_tier(creds, headers)
+
+        if not discovered:
+            raise ValueError(
+                "Could not get project ID. The account may need manual onboarding. "
+                "Try visiting https://codeassist.google.com/ to set up your account."
+            )
 
         logger.info(f"Discovered project ID: {discovered}")
         _user_project_id = discovered
