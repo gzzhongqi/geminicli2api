@@ -61,11 +61,8 @@ def _extract_model_from_path(path: str) -> Optional[str]:
 
 
 @router.get("/v1beta/models")
-async def gemini_list_models(
-    request: Request,
-    username: str = Depends(authenticate_user),
-) -> Response:
-    """Native Gemini models endpoint."""
+async def gemini_list_models(request: Request) -> Response:
+    """Native Gemini models endpoint. No authentication required."""
     try:
         logger.info("Gemini models list requested")
         return Response(

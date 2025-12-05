@@ -217,10 +217,8 @@ async def openai_chat_completions(
 
 
 @router.get("/v1/models", response_model=None)
-async def openai_list_models(
-    username: str = Depends(authenticate_user),
-) -> Union[Dict[str, Any], Response]:
-    """OpenAI-compatible models endpoint."""
+async def openai_list_models() -> Union[Dict[str, Any], Response]:
+    """OpenAI-compatible models endpoint. No authentication required."""
     try:
         logger.info("Models list requested")
 
