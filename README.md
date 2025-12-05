@@ -40,6 +40,29 @@ docker run -p 8888:8888 \
   geminicli2api
 ```
 
+## Credential Management CLI
+
+Easily manage multiple Google accounts for load balancing:
+
+```bash
+# Add a new credential (opens browser for OAuth)
+uv run python -m src.cli auth add
+uv run python -m src.cli auth add --name "work-account"
+
+# List all credentials
+uv run python -m src.cli auth list
+
+# Remove a credential
+uv run python -m src.cli auth remove credential_1
+
+# Export for deployment
+uv run python -m src.cli auth export              # Print to stdout
+uv run python -m src.cli auth export -o .env      # Save to file
+uv run python -m src.cli auth export --docker     # Docker-compose format
+```
+
+Credentials are stored in `~/.geminicli2api/credentials/`.
+
 ## Configuration
 
 ### Single Credential (Default)
@@ -71,6 +94,11 @@ GEMINI_CREDENTIAL_FILES=creds1.json,creds2.json,creds3.json
 - **Automatic fallback** - If a credential fails (401, 403, 429), automatically retry with another
 - **Recovery time** - Failed credentials are retried after 5 minutes
 - **Backward compatible** - Single credential setup continues to work
+
+**Workflow for multiple accounts:**
+1. Use `uv run python -m src.cli auth add` to authenticate each Google account
+2. Export with `uv run python -m src.cli auth export -o .env`
+3. Copy the `.env` file to your server or use with docker-compose
 
 ## API Endpoints
 
