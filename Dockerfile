@@ -1,10 +1,7 @@
 # Build stage
-FROM python:3.11-slim AS builder
+FROM ghcr.io/astral-sh/uv:python3.11-bookworm-slim AS builder
 
 WORKDIR /app
-
-# Install uv
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
 # Copy project files
 COPY pyproject.toml .
@@ -15,12 +12,11 @@ COPY run.py .
 RUN uv sync --no-dev --no-editable
 
 # Run stage
-FROM python:3.11-slim
+FROM ghcr.io/astral-sh/uv:python3.11-bookworm-slim
 
 WORKDIR /app
 
-# Copy uv and virtual environment from builder
-COPY --from=builder /bin/uv /bin/uv
+# Copy virtual environment from builder
 COPY --from=builder /app /app
 
 # Create non-root user for security
