@@ -1,6 +1,7 @@
 """
 Authentication module for Geminicli2api.
 Handles OAuth2 authentication with Google APIs.
+Supports multiple credentials with round-robin selection and automatic fallback.
 """
 
 import os
@@ -8,9 +9,12 @@ import json
 import base64
 import time
 import logging
+import threading
+import re
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from typing import Optional
+from typing import Optional, List, Tuple
 from urllib.parse import urlparse, parse_qs
 
 from fastapi import Request, HTTPException
@@ -38,11 +42,197 @@ from ..config import (
 
 logger = logging.getLogger(__name__)
 
+# --- Constants ---
+CREDENTIAL_RECOVERY_TIME = 300  # 5 minutes before retrying failed credential
+
 # --- Global State ---
 _credentials: Optional[Credentials] = None
 _user_project_id: Optional[str] = None
 _onboarding_complete: bool = False
 _credentials_from_env: bool = False
+
+
+# --- Credential Pool for Multiple Credentials ---
+@dataclass
+class CredentialEntry:
+    """Represents a single credential with its metadata."""
+
+    credentials: Credentials
+    project_id: Optional[str] = None
+    source: str = "unknown"
+    index: int = 0
+    failed_at: Optional[float] = None
+    onboarding_complete: bool = False
+    from_env: bool = False
+
+
+class CredentialPool:
+    """
+    Manages multiple Google OAuth credentials with round-robin selection
+    and automatic fallback on failure.
+    """
+
+    def __init__(self):
+        self._entries: List[CredentialEntry] = []
+        self._current_index: int = 0
+        self._lock = threading.Lock()
+
+    def add(self, entry: CredentialEntry) -> None:
+        """Add a credential entry to the pool."""
+        with self._lock:
+            entry.index = len(self._entries)
+            self._entries.append(entry)
+            logger.info(f"Added credential #{entry.index + 1} from {entry.source}")
+
+    def size(self) -> int:
+        """Return the number of credentials in the pool."""
+        return len(self._entries)
+
+    def is_empty(self) -> bool:
+        """Check if the pool has no credentials."""
+        return len(self._entries) == 0
+
+    def get_next(self) -> Optional[Tuple[CredentialEntry, int]]:
+        """
+        Get the next available credential using round-robin selection.
+        Skips credentials that are temporarily marked as failed.
+
+        Returns:
+            Tuple of (CredentialEntry, index) or None if no credentials available
+        """
+        with self._lock:
+            if not self._entries:
+                return None
+
+            current_time = time.time()
+            attempts = 0
+            total = len(self._entries)
+
+            while attempts < total:
+                entry = self._entries[self._current_index]
+                idx = self._current_index
+                self._current_index = (self._current_index + 1) % total
+
+                # Check if credential has recovered from failure
+                if entry.failed_at is not None:
+                    if current_time - entry.failed_at >= CREDENTIAL_RECOVERY_TIME:
+                        entry.failed_at = None
+                        logger.info(f"Credential #{idx + 1} recovered, now available")
+                    else:
+                        attempts += 1
+                        continue
+
+                logger.debug(f"Selected credential #{idx + 1} (round-robin)")
+                return (entry, idx)
+
+            # All credentials failed, try the least recently failed one
+            logger.warning("All credentials marked as failed, trying oldest failure")
+            oldest_entry = min(self._entries, key=lambda e: e.failed_at or 0)
+            oldest_entry.failed_at = None
+            return (oldest_entry, oldest_entry.index)
+
+    def get_fallback(self, exclude_index: int) -> Optional[Tuple[CredentialEntry, int]]:
+        """
+        Get a fallback credential, excluding the specified index.
+
+        Args:
+            exclude_index: Index of credential to skip
+
+        Returns:
+            Tuple of (CredentialEntry, index) or None if no fallback available
+        """
+        with self._lock:
+            if len(self._entries) <= 1:
+                return None
+
+            current_time = time.time()
+
+            for i, entry in enumerate(self._entries):
+                if i == exclude_index:
+                    continue
+
+                # Check if recovered or never failed
+                if entry.failed_at is None:
+                    logger.info(f"Using fallback credential #{i + 1}")
+                    return (entry, i)
+                elif current_time - entry.failed_at >= CREDENTIAL_RECOVERY_TIME:
+                    entry.failed_at = None
+                    logger.info(f"Using recovered fallback credential #{i + 1}")
+                    return (entry, i)
+
+            return None
+
+    def mark_failed(self, index: int) -> None:
+        """
+        Mark a credential as temporarily failed.
+
+        Args:
+            index: Index of the failed credential
+        """
+        with self._lock:
+            if 0 <= index < len(self._entries):
+                self._entries[index].failed_at = time.time()
+                logger.warning(
+                    f"Credential #{index + 1} marked as failed, "
+                    f"will retry in {CREDENTIAL_RECOVERY_TIME}s"
+                )
+
+    def mark_success(self, index: int) -> None:
+        """
+        Mark a credential as successful (clear failed status).
+
+        Args:
+            index: Index of the successful credential
+        """
+        with self._lock:
+            if 0 <= index < len(self._entries):
+                if self._entries[index].failed_at is not None:
+                    self._entries[index].failed_at = None
+                    logger.info(f"Credential #{index + 1} marked as recovered")
+
+    def get_entry(self, index: int) -> Optional[CredentialEntry]:
+        """Get a specific credential entry by index."""
+        with self._lock:
+            if 0 <= index < len(self._entries):
+                return self._entries[index]
+            return None
+
+    def update_project_id(self, index: int, project_id: str) -> None:
+        """Update the project ID for a credential entry."""
+        with self._lock:
+            if 0 <= index < len(self._entries):
+                self._entries[index].project_id = project_id
+
+    def set_onboarding_complete(self, index: int) -> None:
+        """Mark onboarding as complete for a credential entry."""
+        with self._lock:
+            if 0 <= index < len(self._entries):
+                self._entries[index].onboarding_complete = True
+
+    def get_stats(self) -> dict:
+        """Get pool statistics for debugging."""
+        with self._lock:
+            current_time = time.time()
+            return {
+                "total": len(self._entries),
+                "available": sum(
+                    1
+                    for e in self._entries
+                    if e.failed_at is None
+                    or current_time - e.failed_at >= CREDENTIAL_RECOVERY_TIME
+                ),
+                "failed": sum(
+                    1
+                    for e in self._entries
+                    if e.failed_at is not None
+                    and current_time - e.failed_at < CREDENTIAL_RECOVERY_TIME
+                ),
+                "current_index": self._current_index,
+            }
+
+
+# Global credential pool instance
+_credential_pool: Optional[CredentialPool] = None
 
 
 class _OAuthCallbackHandler(BaseHTTPRequestHandler):
@@ -389,6 +579,238 @@ def _load_credentials_from_file() -> Optional[Credentials]:
     return None
 
 
+# --- Multi-Credential Loading Functions ---
+
+
+def _load_credential_entry_from_json(
+    json_str: str, source: str
+) -> Optional[CredentialEntry]:
+    """
+    Create a CredentialEntry from JSON string.
+
+    Args:
+        json_str: JSON string containing credentials
+        source: Source identifier for logging
+
+    Returns:
+        CredentialEntry or None if parsing fails
+    """
+    try:
+        raw_data = json.loads(json_str)
+    except json.JSONDecodeError as e:
+        logger.error(f"Failed to parse credentials JSON from {source}: {e}")
+        return None
+
+    if not raw_data.get("refresh_token"):
+        logger.warning(f"No refresh_token in credentials from {source}")
+        return None
+
+    # Try normal parsing first
+    creds = _create_credentials_from_data(raw_data, source)
+    if not creds:
+        # Try minimal credentials as fallback
+        creds = _create_minimal_credentials(raw_data)
+
+    if not creds:
+        return None
+
+    if creds.expired:
+        _refresh_credentials(creds)
+
+    project_id = raw_data.get("project_id")
+
+    return CredentialEntry(
+        credentials=creds,
+        project_id=project_id,
+        source=source,
+        from_env=True,
+    )
+
+
+def _load_credential_entry_from_file(
+    file_path: str, source: str
+) -> Optional[CredentialEntry]:
+    """
+    Create a CredentialEntry from a file.
+
+    Args:
+        file_path: Path to the credentials file
+        source: Source identifier for logging
+
+    Returns:
+        CredentialEntry or None if loading fails
+    """
+    if not os.path.exists(file_path):
+        logger.warning(f"Credentials file not found: {file_path}")
+        return None
+
+    try:
+        with open(file_path, "r") as f:
+            raw_data = json.load(f)
+    except (IOError, json.JSONDecodeError) as e:
+        logger.error(f"Failed to read credentials file {file_path}: {e}")
+        return None
+
+    if not raw_data.get("refresh_token"):
+        logger.warning(f"No refresh_token in credentials file {file_path}")
+        return None
+
+    # Try normal parsing first
+    creds = _create_credentials_from_data(raw_data, source)
+    if not creds:
+        # Try minimal credentials as fallback
+        creds = _create_minimal_credentials(raw_data)
+
+    if not creds:
+        return None
+
+    if creds.expired:
+        _refresh_credentials(creds)
+
+    project_id = raw_data.get("project_id")
+
+    return CredentialEntry(
+        credentials=creds,
+        project_id=project_id,
+        source=source,
+        from_env=False,
+    )
+
+
+def _load_multiple_credentials_from_env() -> List[CredentialEntry]:
+    """
+    Load multiple credentials from environment variables.
+    Supports patterns: GEMINI_CREDENTIALS_1, GEMINI_CREDENTIALS_2, etc.
+
+    Returns:
+        List of CredentialEntry objects
+    """
+    entries: List[CredentialEntry] = []
+
+    # Find all GEMINI_CREDENTIALS_N environment variables
+    pattern = re.compile(r"^GEMINI_CREDENTIALS_(\d+)$")
+    indexed_vars: List[Tuple[int, str, str]] = []
+
+    for key, value in os.environ.items():
+        match = pattern.match(key)
+        if match:
+            index = int(match.group(1))
+            indexed_vars.append((index, key, value))
+
+    # Sort by index to maintain order
+    indexed_vars.sort(key=lambda x: x[0])
+
+    for index, key, value in indexed_vars:
+        entry = _load_credential_entry_from_json(value, f"env:{key}")
+        if entry:
+            entries.append(entry)
+
+    if entries:
+        logger.info(f"Loaded {len(entries)} credentials from indexed env vars")
+
+    return entries
+
+
+def _load_multiple_credentials_from_files() -> List[CredentialEntry]:
+    """
+    Load multiple credentials from files specified in GEMINI_CREDENTIAL_FILES.
+    Format: comma-separated list of file paths.
+
+    Returns:
+        List of CredentialEntry objects
+    """
+    entries: List[CredentialEntry] = []
+
+    files_str = os.getenv("GEMINI_CREDENTIAL_FILES", "")
+    if not files_str:
+        return entries
+
+    file_paths = [f.strip() for f in files_str.split(",") if f.strip()]
+
+    for i, file_path in enumerate(file_paths):
+        # Handle relative paths
+        if not os.path.isabs(file_path):
+            from ..config import SCRIPT_DIR
+
+            file_path = os.path.join(SCRIPT_DIR, file_path)
+
+        entry = _load_credential_entry_from_file(file_path, f"file:{file_path}")
+        if entry:
+            entries.append(entry)
+
+    if entries:
+        logger.info(f"Loaded {len(entries)} credentials from files")
+
+    return entries
+
+
+def initialize_credential_pool() -> CredentialPool:
+    """
+    Initialize the credential pool with all available credentials.
+    Loads from multiple sources in order of priority.
+
+    Returns:
+        Initialized CredentialPool
+    """
+    global _credential_pool
+
+    if _credential_pool is not None and not _credential_pool.is_empty():
+        return _credential_pool
+
+    _credential_pool = CredentialPool()
+
+    # Priority 1: Multiple indexed environment variables (GEMINI_CREDENTIALS_N)
+    env_entries = _load_multiple_credentials_from_env()
+    for entry in env_entries:
+        _credential_pool.add(entry)
+
+    # Priority 2: Multiple files (GEMINI_CREDENTIAL_FILES)
+    file_entries = _load_multiple_credentials_from_files()
+    for entry in file_entries:
+        _credential_pool.add(entry)
+
+    # Priority 3: Single GEMINI_CREDENTIALS env var (backward compatibility)
+    if _credential_pool.is_empty():
+        single_creds_json = os.getenv("GEMINI_CREDENTIALS")
+        if single_creds_json:
+            entry = _load_credential_entry_from_json(
+                single_creds_json, "env:GEMINI_CREDENTIALS"
+            )
+            if entry:
+                _credential_pool.add(entry)
+
+    # Priority 4: Default credential file (backward compatibility)
+    if _credential_pool.is_empty():
+        entry = _load_credential_entry_from_file(
+            CREDENTIAL_FILE, f"file:{CREDENTIAL_FILE}"
+        )
+        if entry:
+            _credential_pool.add(entry)
+
+    stats = _credential_pool.get_stats()
+    logger.info(
+        f"Credential pool initialized: {stats['total']} total, "
+        f"{stats['available']} available"
+    )
+
+    return _credential_pool
+
+
+def get_credential_pool() -> CredentialPool:
+    """
+    Get or initialize the credential pool.
+
+    Returns:
+        The global CredentialPool instance
+    """
+    global _credential_pool
+
+    if _credential_pool is None:
+        return initialize_credential_pool()
+
+    return _credential_pool
+
+
 def _run_oauth_flow() -> Optional[Credentials]:
     """Run interactive OAuth flow."""
     global _credentials_from_env
@@ -447,7 +869,7 @@ def _run_oauth_flow() -> Optional[Credentials]:
 
 def get_credentials(allow_oauth_flow: bool = True) -> Optional[Credentials]:
     """
-    Load or obtain OAuth credentials.
+    Load or obtain OAuth credentials (backward compatible single-credential mode).
 
     Args:
         allow_oauth_flow: Whether to run interactive OAuth if needed
@@ -477,6 +899,189 @@ def get_credentials(allow_oauth_flow: bool = True) -> Optional[Credentials]:
 
     logger.info("OAuth flow not allowed, returning None")
     return None
+
+
+def get_next_credential(
+    allow_oauth_flow: bool = True,
+) -> Optional[Tuple[Credentials, int]]:
+    """
+    Get the next available credential from the pool using round-robin selection.
+
+    Args:
+        allow_oauth_flow: Whether to run interactive OAuth if pool is empty
+
+    Returns:
+        Tuple of (Credentials, credential_index) or None if unavailable
+    """
+    pool = get_credential_pool()
+
+    if pool.is_empty():
+        # Fallback to single credential mode / OAuth flow
+        creds = get_credentials(allow_oauth_flow)
+        if creds:
+            return (creds, -1)  # -1 indicates single credential mode
+        return None
+
+    result = pool.get_next()
+    if result:
+        entry, idx = result
+        # Refresh if needed
+        if entry.credentials.expired and entry.credentials.refresh_token:
+            try:
+                entry.credentials.refresh(GoogleAuthRequest())
+                logger.debug(f"Refreshed credential #{idx + 1}")
+            except Exception as e:
+                logger.warning(f"Failed to refresh credential #{idx + 1}: {e}")
+                pool.mark_failed(idx)
+                # Try to get fallback
+                fallback = pool.get_fallback(idx)
+                if fallback:
+                    return (fallback[0].credentials, fallback[1])
+                return None
+
+        return (entry.credentials, idx)
+
+    return None
+
+
+def get_fallback_credential(exclude_index: int) -> Optional[Tuple[Credentials, int]]:
+    """
+    Get a fallback credential when the current one fails.
+
+    Args:
+        exclude_index: Index of credential to skip
+
+    Returns:
+        Tuple of (Credentials, credential_index) or None if no fallback available
+    """
+    if exclude_index == -1:
+        # Single credential mode, no fallback
+        return None
+
+    pool = get_credential_pool()
+    result = pool.get_fallback(exclude_index)
+
+    if result:
+        entry, idx = result
+        # Refresh if needed
+        if entry.credentials.expired and entry.credentials.refresh_token:
+            try:
+                entry.credentials.refresh(GoogleAuthRequest())
+            except Exception as e:
+                logger.warning(f"Failed to refresh fallback credential #{idx + 1}: {e}")
+                pool.mark_failed(idx)
+                return None
+
+        return (entry.credentials, idx)
+
+    return None
+
+
+def mark_credential_failed(index: int) -> None:
+    """
+    Mark a credential as failed.
+
+    Args:
+        index: Index of the failed credential (-1 for single credential mode)
+    """
+    if index == -1:
+        return  # Single credential mode, nothing to mark
+
+    pool = get_credential_pool()
+    pool.mark_failed(index)
+
+
+def mark_credential_success(index: int) -> None:
+    """
+    Mark a credential as successful (clear failed status).
+
+    Args:
+        index: Index of the successful credential
+    """
+    if index == -1:
+        return  # Single credential mode
+
+    pool = get_credential_pool()
+    pool.mark_success(index)
+
+
+def get_credential_project_id(index: int) -> Optional[str]:
+    """
+    Get the project ID associated with a credential.
+
+    Args:
+        index: Credential index
+
+    Returns:
+        Project ID or None
+    """
+    if index == -1:
+        return None  # Use global project ID discovery
+
+    pool = get_credential_pool()
+    entry = pool.get_entry(index)
+    return entry.project_id if entry else None
+
+
+def set_credential_project_id(index: int, project_id: str) -> None:
+    """
+    Set the project ID for a credential.
+
+    Args:
+        index: Credential index
+        project_id: Project ID to set
+    """
+    if index == -1:
+        return  # Single credential mode uses global
+
+    pool = get_credential_pool()
+    pool.update_project_id(index, project_id)
+
+
+def is_credential_onboarded(index: int) -> bool:
+    """
+    Check if a credential has completed onboarding.
+
+    Args:
+        index: Credential index
+
+    Returns:
+        True if onboarded
+    """
+    if index == -1:
+        return _onboarding_complete
+
+    pool = get_credential_pool()
+    entry = pool.get_entry(index)
+    return entry.onboarding_complete if entry else False
+
+
+def set_credential_onboarded(index: int) -> None:
+    """
+    Mark a credential as having completed onboarding.
+
+    Args:
+        index: Credential index
+    """
+    global _onboarding_complete
+
+    if index == -1:
+        _onboarding_complete = True
+        return
+
+    pool = get_credential_pool()
+    pool.set_onboarding_complete(index)
+
+
+def get_pool_stats() -> dict:
+    """
+    Get credential pool statistics.
+
+    Returns:
+        Dictionary with pool statistics
+    """
+    pool = get_credential_pool()
+    return pool.get_stats()
 
 
 def onboard_user(creds: Credentials, project_id: str) -> None:
