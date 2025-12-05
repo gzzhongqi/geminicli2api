@@ -78,6 +78,9 @@ GEMINI_CREDENTIAL_FILES=creds1.json,creds2.json,creds3.json
 - `POST /v1/chat/completions` - Chat completions
 - `GET /v1/models` - List models
 
+### Anthropic-Compatible
+- `POST /v1/messages` - Messages API
+
 ### Native Gemini
 - `GET /v1beta/models` - List models
 - `POST /v1beta/models/{model}:generateContent` - Generate content
