@@ -40,6 +40,21 @@ docker run -p 8888:8888 \
   geminicli2api
 ```
 
+## Deploy to Railway
+
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/template/Nigp84?referralCode=xsbY2R)
+
+Or deploy manually:
+
+1. Fork this repository
+2. Create a new project on [Railway](https://railway.app)
+3. Connect your GitHub repo
+4. Add environment variables:
+   - `GEMINI_AUTH_PASSWORD` - Your API password
+   - `GEMINI_CREDENTIALS_1` - First credential JSON (from `uv run python -m src.cli auth export`)
+   - `GEMINI_CREDENTIALS_2` - (Optional) Additional credentials
+5. Deploy!
+
 ## Credential Management CLI
 
 Easily manage multiple Google accounts for load balancing:
