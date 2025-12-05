@@ -19,9 +19,13 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
 
 # Virtual environments
 venv/
+.venv/
 env/
 ENV/
 
@@ -30,6 +34,7 @@ ENV/
 .idea/
 *.swp
 *.swo
+*.sublime-*
 
 # OS
 .DS_Store
@@ -39,21 +44,36 @@ Thumbs.db
 .git/
 .gitignore
 
-# Credentials and secrets
-credentials.json
-.env
+# Credentials and secrets (IMPORTANT: never include in image)
+credentials/
+oauth_creds*.json
 *.pem
 *.key
+.env
+.env.*
+
+# Tests (not needed in production)
+tests/
+pytest.ini
+.coverage
+htmlcov/
 
 # Logs
 *.log
 logs/
 
-# Documentation
+# Documentation (not needed in production)
 README.md
+AGENTS.md
 docs/
+*.md
 
-# Docker
+# Docker files (not needed inside container)
 Dockerfile
 .dockerignore
-docker-compose.yml
+docker-compose*.yml
+
+# Development files
+.editorconfig
+.pre-commit-config.yaml
+Makefile
