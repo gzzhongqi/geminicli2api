@@ -10,9 +10,7 @@ from typing import Any, Dict
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 
-from .anthropic_routes import router as anthropic_router
-from .routes.gemini import router as gemini_router
-from .routes.openai import router as openai_router
+from .routes import anthropic_router, gemini_router, openai_router
 from .services.auth import (
     get_credentials,
     get_user_project_id,

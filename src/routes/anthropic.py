@@ -4,27 +4,27 @@ This module provides Anthropic-compatible endpoints that transform requests/resp
 and delegate to the Google API client.
 """
 
-import json
 import asyncio
+import json
 import logging
-from fastapi import APIRouter, Request, Response, Depends, Header, HTTPException
-from fastapi.responses import StreamingResponse
 from typing import Optional
 
-from .services.auth import authenticate_user
-from .schemas import AnthropicMessagesRequest
-from .anthropic_transformers import (
-    anthropic_request_to_gemini,
-    gemini_response_to_anthropic,
-    AnthropicStreamProcessor,
-    format_sse_event,
-    create_anthropic_error,
-)
-from .services.gemini_client import (
-    send_gemini_request,
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
+from fastapi.responses import StreamingResponse
+
+from ..config import GEMINI_AUTH_PASSWORD
+from ..schemas import AnthropicMessagesRequest
+from ..services.gemini_client import (
     build_gemini_payload_from_openai,
+    send_gemini_request,
 )
-from .config import GEMINI_AUTH_PASSWORD
+from .transformers import (
+    AnthropicStreamProcessor,
+    anthropic_request_to_gemini,
+    create_anthropic_error,
+    format_sse_event,
+    gemini_response_to_anthropic,
+)
 
 router = APIRouter()
 
