@@ -1,38 +1,43 @@
-FROM python:3.11-slim
+# Build stage
+FROM python:3.11-slim AS builder
 
-# Set working directory
 WORKDIR /app
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    gcc \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
+# Install uv
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
-# Copy requirements first for better caching
-COPY requirements.txt .
+# Copy project files
+COPY pyproject.toml .
+COPY src/ src/
+COPY run.py .
 
-# Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
+# Install dependencies
+RUN uv sync --no-dev --no-editable
 
-# Copy application code
-COPY . .
+# Run stage
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Copy uv and virtual environment from builder
+COPY --from=builder /bin/uv /bin/uv
+COPY --from=builder /app /app
 
 # Create non-root user for security
 RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
 USER appuser
 
-# Expose ports (8888 for compatibility, 7860 for Hugging Face)
-EXPOSE 8888 7860
+# Expose port
+EXPOSE 8888
 
 # Set environment variables
 ENV PYTHONPATH=/app
 ENV HOST=0.0.0.0
-ENV PORT=7860
+ENV PORT=8888
 
-# Health check (use PORT environment variable)
+# Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:${PORT}/health || exit 1
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:${PORT}/health')" || exit 1
 
-# Run the application using app.py (Hugging Face compatible entry point)
-CMD ["python", "app.py"]
+# Run the application
+CMD ["uv", "run", "python", "run.py"]

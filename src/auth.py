@@ -1,35 +1,56 @@
+"""
+Authentication module for Geminicli2api.
+Handles OAuth2 authentication with Google APIs.
+"""
+
 import os
 import json
 import base64
 import time
 import logging
-from datetime import datetime
-from fastapi import Request, HTTPException, Depends
-from fastapi.security import HTTPBasic
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from typing import Optional
 from urllib.parse import urlparse, parse_qs
 
+from fastapi import Request, HTTPException
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
 from google.auth.transport.requests import Request as GoogleAuthRequest
+import requests
 
 from .utils import get_user_agent, get_client_metadata
 from .config import (
-    CLIENT_ID, CLIENT_SECRET, SCOPES, CREDENTIAL_FILE,
-    CODE_ASSIST_ENDPOINT, GEMINI_AUTH_PASSWORD
+    CLIENT_ID,
+    CLIENT_SECRET,
+    SCOPES,
+    CREDENTIAL_FILE,
+    CODE_ASSIST_ENDPOINT,
+    GEMINI_AUTH_PASSWORD,
+    TOKEN_URI,
+    AUTH_URI,
+    OAUTH_REDIRECT_URI,
+    OAUTH_CALLBACK_PORT,
+    ONBOARD_POLL_INTERVAL,
+    ONBOARD_MAX_RETRIES,
+    ISO_DATE_FORMAT,
 )
 
-# --- Global State ---
-credentials = None
-user_project_id = None
-onboarding_complete = False
-credentials_from_env = False  # Track if credentials came from environment variable
+logger = logging.getLogger(__name__)
 
-security = HTTPBasic()
+# --- Global State ---
+_credentials: Optional[Credentials] = None
+_user_project_id: Optional[str] = None
+_onboarding_complete: bool = False
+_credentials_from_env: bool = False
+
 
 class _OAuthCallbackHandler(BaseHTTPRequestHandler):
-    auth_code = None
-    def do_GET(self):
+    """HTTP handler for OAuth callback."""
+
+    auth_code: Optional[str] = None
+
+    def do_GET(self) -> None:
         query_components = parse_qs(urlparse(self.path).query)
         code = query_components.get("code", [None])[0]
         if code:
@@ -37,88 +58,245 @@ class _OAuthCallbackHandler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-type", "text/html")
             self.end_headers()
-            self.wfile.write(b"<h1>OAuth authentication successful!</h1><p>You can close this window. Please check the proxy server logs to verify that onboarding completed successfully. No need to restart the proxy.</p>")
+            self.wfile.write(
+                b"<h1>OAuth authentication successful!</h1>"
+                b"<p>You can close this window.</p>"
+            )
         else:
             self.send_response(400)
             self.send_header("Content-type", "text/html")
             self.end_headers()
             self.wfile.write(b"<h1>Authentication failed.</h1><p>Please try again.</p>")
 
-def authenticate_user(request: Request):
-    """Authenticate the user with multiple methods."""
-    # Check for API key in query parameters first (for Gemini client compatibility)
+    def log_message(self, format: str, *args) -> None:
+        """Suppress default HTTP server logging."""
+        pass
+
+
+def _parse_expiry(expiry_str: str) -> Optional[str]:
+    """
+    Parse and normalize expiry string to ISO format.
+
+    Args:
+        expiry_str: Expiry timestamp string in various formats
+
+    Returns:
+        Normalized expiry string or None if parsing fails
+    """
+    if not isinstance(expiry_str, str):
+        return None
+
+    try:
+        if "+00:00" in expiry_str:
+            parsed_expiry = datetime.fromisoformat(expiry_str)
+        elif expiry_str.endswith("Z"):
+            parsed_expiry = datetime.fromisoformat(expiry_str.replace("Z", "+00:00"))
+        else:
+            parsed_expiry = datetime.fromisoformat(expiry_str)
+
+        timestamp = parsed_expiry.timestamp()
+        return datetime.utcfromtimestamp(timestamp).strftime(ISO_DATE_FORMAT)
+    except (ValueError, OSError) as e:
+        logger.warning(f"Could not parse expiry format '{expiry_str}': {e}")
+        return None
+
+
+def _normalize_credentials_data(creds_data: dict) -> dict:
+    """
+    Normalize credential data to standard format.
+
+    Args:
+        creds_data: Raw credentials dictionary
+
+    Returns:
+        Normalized credentials dictionary
+    """
+    normalized = creds_data.copy()
+
+    # Handle access_token -> token mapping
+    if "access_token" in normalized and "token" not in normalized:
+        normalized["token"] = normalized["access_token"]
+
+    # Handle scope -> scopes mapping
+    if "scope" in normalized and "scopes" not in normalized:
+        normalized["scopes"] = normalized["scope"].split()
+
+    # Handle expiry format
+    if "expiry" in normalized:
+        parsed_expiry = _parse_expiry(normalized["expiry"])
+        if parsed_expiry:
+            normalized["expiry"] = parsed_expiry
+        else:
+            del normalized["expiry"]
+
+    return normalized
+
+
+def _create_credentials_from_data(
+    creds_data: dict, source: str = "unknown"
+) -> Optional[Credentials]:
+    """
+    Create Credentials object from data dictionary.
+
+    Args:
+        creds_data: Credentials data dictionary
+        source: Source identifier for logging
+
+    Returns:
+        Credentials object or None if creation fails
+    """
+    global _user_project_id
+
+    try:
+        normalized = _normalize_credentials_data(creds_data)
+        credentials = Credentials.from_authorized_user_info(normalized, SCOPES)
+
+        # Extract project_id if available
+        if "project_id" in creds_data:
+            _user_project_id = creds_data["project_id"]
+            logger.info(f"Extracted project_id from {source}: {_user_project_id}")
+
+        return credentials
+    except Exception as e:
+        logger.warning(f"Failed to create credentials from {source}: {e}")
+        return None
+
+
+def _create_minimal_credentials(creds_data: dict) -> Optional[Credentials]:
+    """
+    Create minimal credentials with just refresh token.
+
+    Args:
+        creds_data: Raw credentials data with refresh_token
+
+    Returns:
+        Credentials object or None if creation fails
+    """
+    try:
+        minimal_data = {
+            "client_id": creds_data.get("client_id", CLIENT_ID),
+            "client_secret": creds_data.get("client_secret", CLIENT_SECRET),
+            "refresh_token": creds_data["refresh_token"],
+            "token_uri": TOKEN_URI,
+        }
+        return Credentials.from_authorized_user_info(minimal_data, SCOPES)
+    except Exception as e:
+        logger.error(f"Failed to create minimal credentials: {e}")
+        return None
+
+
+def _refresh_credentials(creds: Credentials) -> bool:
+    """
+    Attempt to refresh credentials.
+
+    Args:
+        creds: Credentials object to refresh
+
+    Returns:
+        True if refresh succeeded, False otherwise
+    """
+    if not creds.refresh_token:
+        logger.warning("No refresh token available")
+        return False
+
+    try:
+        creds.refresh(GoogleAuthRequest())
+        logger.info("Credentials refreshed successfully")
+        return True
+    except Exception as e:
+        logger.warning(f"Failed to refresh credentials: {e}")
+        return False
+
+
+def authenticate_user(request: Request) -> str:
+    """
+    Authenticate the user with multiple methods.
+
+    Args:
+        request: FastAPI request object
+
+    Returns:
+        Username/identifier of authenticated user
+
+    Raises:
+        HTTPException: If authentication fails
+    """
+    # Check API key in query parameters
     api_key = request.query_params.get("key")
     if api_key and api_key == GEMINI_AUTH_PASSWORD:
         return "api_key_user"
-    
-    # Check for API key in x-goog-api-key header (Google SDK format)
+
+    # Check x-goog-api-key header
     goog_api_key = request.headers.get("x-goog-api-key", "")
     if goog_api_key and goog_api_key == GEMINI_AUTH_PASSWORD:
         return "goog_api_key_user"
-    
-    # Check for API key in Authorization header (Bearer token format)
+
+    # Check Bearer token
     auth_header = request.headers.get("authorization", "")
     if auth_header.startswith("Bearer "):
         bearer_token = auth_header[7:]
         if bearer_token == GEMINI_AUTH_PASSWORD:
             return "bearer_user"
-    
-    # Check for HTTP Basic Authentication
+
+    # Check Basic auth
     if auth_header.startswith("Basic "):
         try:
-            encoded_credentials = auth_header[6:]
-            decoded_credentials = base64.b64decode(encoded_credentials).decode('utf-8', "ignore")
-            username, password = decoded_credentials.split(':', 1)
+            encoded = auth_header[6:]
+            decoded = base64.b64decode(encoded).decode("utf-8", "ignore")
+            _, password = decoded.split(":", 1)
             if password == GEMINI_AUTH_PASSWORD:
-                return username
-        except Exception:
-            pass
-    
-    # If none of the authentication methods work
+                return "basic_user"
+        except (ValueError, UnicodeDecodeError) as e:
+            logger.debug(f"Basic auth decode failed: {e}")
+
     raise HTTPException(
         status_code=401,
-        detail="Invalid authentication credentials. Use HTTP Basic Auth, Bearer token, 'key' query parameter, or 'x-goog-api-key' header.",
+        detail="Invalid authentication credentials.",
         headers={"WWW-Authenticate": "Basic"},
     )
 
-def save_credentials(creds, project_id=None):
-    global credentials_from_env
-    
-    # Don't save credentials to file if they came from environment variable,
-    # but still save project_id if provided and no file exists or file lacks project_id
-    if credentials_from_env:
+
+def save_credentials(creds: Credentials, project_id: Optional[str] = None) -> None:
+    """
+    Save credentials to file.
+
+    Args:
+        creds: Credentials object to save
+        project_id: Optional project ID to save
+    """
+    global _credentials_from_env
+
+    if _credentials_from_env:
+        # Only update project_id in existing file if needed
         if project_id and os.path.exists(CREDENTIAL_FILE):
             try:
                 with open(CREDENTIAL_FILE, "r") as f:
                     existing_data = json.load(f)
-                # Only update project_id if it's missing from the file
                 if "project_id" not in existing_data:
                     existing_data["project_id"] = project_id
                     with open(CREDENTIAL_FILE, "w") as f:
                         json.dump(existing_data, f, indent=2)
-                    logging.info(f"Added project_id {project_id} to existing credential file")
-            except Exception as e:
-                logging.warning(f"Could not update project_id in credential file: {e}")
+                    logger.info(f"Added project_id {project_id} to credential file")
+            except (IOError, json.JSONDecodeError) as e:
+                logger.warning(f"Could not update project_id in credential file: {e}")
         return
-    
+
     creds_data = {
         "client_id": CLIENT_ID,
         "client_secret": CLIENT_SECRET,
         "token": creds.token,
         "refresh_token": creds.refresh_token,
-        "scopes": creds.scopes if creds.scopes else SCOPES,
-        "token_uri": "https://oauth2.googleapis.com/token",
+        "scopes": list(creds.scopes) if creds.scopes else SCOPES,
+        "token_uri": TOKEN_URI,
     }
-    
+
     if creds.expiry:
-        if creds.expiry.tzinfo is None:
-            from datetime import timezone
-            expiry_utc = creds.expiry.replace(tzinfo=timezone.utc)
-        else:
-            expiry_utc = creds.expiry
-        # Keep the existing ISO format for backward compatibility, but ensure it's properly handled during loading
+        expiry_utc = creds.expiry
+        if expiry_utc.tzinfo is None:
+            expiry_utc = expiry_utc.replace(tzinfo=timezone.utc)
         creds_data["expiry"] = expiry_utc.isoformat()
-    
+
+    # Preserve or set project_id
     if project_id:
         creds_data["project_id"] = project_id
     elif os.path.exists(CREDENTIAL_FILE):
@@ -127,314 +305,194 @@ def save_credentials(creds, project_id=None):
                 existing_data = json.load(f)
                 if "project_id" in existing_data:
                     creds_data["project_id"] = existing_data["project_id"]
-        except Exception:
+        except (IOError, json.JSONDecodeError):
             pass
-    
-    
+
     with open(CREDENTIAL_FILE, "w") as f:
         json.dump(creds_data, f, indent=2)
-    
 
-def get_credentials(allow_oauth_flow=True):
-    """Loads credentials matching gemini-cli OAuth2 flow."""
-    global credentials, credentials_from_env, user_project_id
-    
-    if credentials and credentials.token:
-        return credentials
-    
-    # Check for credentials in environment variable (JSON string)
+
+def _load_credentials_from_env() -> Optional[Credentials]:
+    """Load credentials from GEMINI_CREDENTIALS environment variable."""
+    global _credentials_from_env
+
     env_creds_json = os.getenv("GEMINI_CREDENTIALS")
-    if env_creds_json:
-        # First, check if we have a refresh token - if so, we should always be able to load credentials
-        try:
-            raw_env_creds_data = json.loads(env_creds_json)
-            
-            # SAFEGUARD: If refresh_token exists, we should always load credentials successfully
-            if "refresh_token" in raw_env_creds_data and raw_env_creds_data["refresh_token"]:
-                logging.info("Environment refresh token found - ensuring credentials load successfully")
-                
-                try:
-                    creds_data = raw_env_creds_data.copy()
-                    
-                    # Handle different credential formats
-                    if "access_token" in creds_data and "token" not in creds_data:
-                        creds_data["token"] = creds_data["access_token"]
-                    
-                    if "scope" in creds_data and "scopes" not in creds_data:
-                        creds_data["scopes"] = creds_data["scope"].split()
-                    
-                    # Handle problematic expiry formats that cause parsing errors
-                    if "expiry" in creds_data:
-                        expiry_str = creds_data["expiry"]
-                        # If expiry has timezone info that causes parsing issues, try to fix it
-                        if isinstance(expiry_str, str) and ("+00:00" in expiry_str or "Z" in expiry_str):
-                            try:
-                                # Try to parse and reformat the expiry to a format Google Credentials can handle
-                                from datetime import datetime
-                                if "+00:00" in expiry_str:
-                                    # Handle ISO format with timezone offset
-                                    parsed_expiry = datetime.fromisoformat(expiry_str)
-                                elif expiry_str.endswith("Z"):
-                                    # Handle ISO format with Z suffix
-                                    parsed_expiry = datetime.fromisoformat(expiry_str.replace('Z', '+00:00'))
-                                else:
-                                    parsed_expiry = datetime.fromisoformat(expiry_str)
-                                
-                                # Convert to UTC timestamp format that Google Credentials library expects
-                                import time
-                                timestamp = parsed_expiry.timestamp()
-                                creds_data["expiry"] = datetime.utcfromtimestamp(timestamp).strftime("%Y-%m-%dT%H:%M:%SZ")
-                                logging.info(f"Converted environment expiry format from '{expiry_str}' to '{creds_data['expiry']}'")
-                            except Exception as expiry_error:
-                                logging.warning(f"Could not parse environment expiry format '{expiry_str}': {expiry_error}, removing expiry field")
-                                # Remove problematic expiry field - credentials will be treated as expired but still loadable
-                                del creds_data["expiry"]
-                    
-                    credentials = Credentials.from_authorized_user_info(creds_data, SCOPES)
-                    credentials_from_env = True  # Mark as environment credentials
-
-                    # Extract project_id from environment credentials if available
-                    if "project_id" in raw_env_creds_data:
-                        user_project_id = raw_env_creds_data["project_id"]
-                        logging.info(f"Extracted project_id from environment credentials: {user_project_id}")
-
-                    # Try to refresh if expired and refresh token exists
-                    if credentials.expired and credentials.refresh_token:
-                        try:
-                            logging.info("Environment credentials expired, attempting refresh...")
-                            credentials.refresh(GoogleAuthRequest())
-                            logging.info("Environment credentials refreshed successfully")
-                        except Exception as refresh_error:
-                            logging.warning(f"Failed to refresh environment credentials: {refresh_error}")
-                            logging.info("Using existing environment credentials despite refresh failure")
-                    elif not credentials.expired:
-                        logging.info("Environment credentials are still valid, no refresh needed")
-                    elif not credentials.refresh_token:
-                        logging.warning("Environment credentials expired but no refresh token available")
-                    
-                    return credentials
-                    
-                except Exception as parsing_error:
-                    # SAFEGUARD: Even if parsing fails, try to create minimal credentials with refresh token
-                    logging.warning(f"Failed to parse environment credentials normally: {parsing_error}")
-                    logging.info("Attempting to create minimal environment credentials with refresh token")
-                    
-                    try:
-                        minimal_creds_data = {
-                            "client_id": raw_env_creds_data.get("client_id", CLIENT_ID),
-                            "client_secret": raw_env_creds_data.get("client_secret", CLIENT_SECRET),
-                            "refresh_token": raw_env_creds_data["refresh_token"],
-                            "token_uri": "https://oauth2.googleapis.com/token",
-                        }
-                        
-                        credentials = Credentials.from_authorized_user_info(minimal_creds_data, SCOPES)
-                        credentials_from_env = True  # Mark as environment credentials
-                        
-                        # Extract project_id from environment credentials if available
-                        if "project_id" in raw_env_creds_data:
-                            user_project_id = raw_env_creds_data["project_id"]
-                            logging.info(f"Extracted project_id from minimal environment credentials: {user_project_id}")
-                        
-                        # Force refresh since we don't have a valid token
-                        try:
-                            logging.info("Refreshing minimal environment credentials...")
-                            credentials.refresh(GoogleAuthRequest())
-                            logging.info("Minimal environment credentials refreshed successfully")
-                            return credentials
-                        except Exception as refresh_error:
-                            logging.error(f"Failed to refresh minimal environment credentials: {refresh_error}")
-                            # Even if refresh fails, return the credentials - they might still work
-                            return credentials
-                            
-                    except Exception as minimal_error:
-                        logging.error(f"Failed to create minimal environment credentials: {minimal_error}")
-                        # Fall through to file-based credentials
-            else:
-                logging.warning("No refresh token found in environment credentials")
-                # Fall through to file-based credentials
-                
-        except Exception as e:
-            logging.error(f"Failed to parse environment credentials JSON: {e}")
-            # Fall through to file-based credentials
-    
-    # Check for credentials file (CREDENTIAL_FILE now includes GOOGLE_APPLICATION_CREDENTIALS path if set)
-    if os.path.exists(CREDENTIAL_FILE):
-        # First, check if we have a refresh token - if so, we should always be able to load credentials
-        try:
-            with open(CREDENTIAL_FILE, "r") as f:
-                raw_creds_data = json.load(f)
-            
-            # SAFEGUARD: If refresh_token exists, we should always load credentials successfully
-            if "refresh_token" in raw_creds_data and raw_creds_data["refresh_token"]:
-                logging.info("Refresh token found - ensuring credentials load successfully")
-                
-                try:
-                    creds_data = raw_creds_data.copy()
-                    
-                    # Handle different credential formats
-                    if "access_token" in creds_data and "token" not in creds_data:
-                        creds_data["token"] = creds_data["access_token"]
-                    
-                    if "scope" in creds_data and "scopes" not in creds_data:
-                        creds_data["scopes"] = creds_data["scope"].split()
-                    
-                    # Handle problematic expiry formats that cause parsing errors
-                    if "expiry" in creds_data:
-                        expiry_str = creds_data["expiry"]
-                        # If expiry has timezone info that causes parsing issues, try to fix it
-                        if isinstance(expiry_str, str) and ("+00:00" in expiry_str or "Z" in expiry_str):
-                            try:
-                                # Try to parse and reformat the expiry to a format Google Credentials can handle
-                                from datetime import datetime
-                                if "+00:00" in expiry_str:
-                                    # Handle ISO format with timezone offset
-                                    parsed_expiry = datetime.fromisoformat(expiry_str)
-                                elif expiry_str.endswith("Z"):
-                                    # Handle ISO format with Z suffix
-                                    parsed_expiry = datetime.fromisoformat(expiry_str.replace('Z', '+00:00'))
-                                else:
-                                    parsed_expiry = datetime.fromisoformat(expiry_str)
-                                
-                                # Convert to UTC timestamp format that Google Credentials library expects
-                                import time
-                                timestamp = parsed_expiry.timestamp()
-                                creds_data["expiry"] = datetime.utcfromtimestamp(timestamp).strftime("%Y-%m-%dT%H:%M:%SZ")
-                                logging.info(f"Converted expiry format from '{expiry_str}' to '{creds_data['expiry']}'")
-                            except Exception as expiry_error:
-                                logging.warning(f"Could not parse expiry format '{expiry_str}': {expiry_error}, removing expiry field")
-                                # Remove problematic expiry field - credentials will be treated as expired but still loadable
-                                del creds_data["expiry"]
-                    
-                    credentials = Credentials.from_authorized_user_info(creds_data, SCOPES)
-                    # Mark as environment credentials if GOOGLE_APPLICATION_CREDENTIALS was used
-                    credentials_from_env = bool(os.getenv("GOOGLE_APPLICATION_CREDENTIALS"))
-
-                    # Try to refresh if expired and refresh token exists
-                    if credentials.expired and credentials.refresh_token:
-                        try:
-                            logging.info("File-based credentials expired, attempting refresh...")
-                            credentials.refresh(GoogleAuthRequest())
-                            logging.info("File-based credentials refreshed successfully")
-                            save_credentials(credentials)
-                        except Exception as refresh_error:
-                            logging.warning(f"Failed to refresh file-based credentials: {refresh_error}")
-                            logging.info("Using existing file-based credentials despite refresh failure")
-                    elif not credentials.expired:
-                        logging.info("File-based credentials are still valid, no refresh needed")
-                    elif not credentials.refresh_token:
-                        logging.warning("File-based credentials expired but no refresh token available")
-                    
-                    return credentials
-                    
-                except Exception as parsing_error:
-                    # SAFEGUARD: Even if parsing fails, try to create minimal credentials with refresh token
-                    logging.warning(f"Failed to parse credentials normally: {parsing_error}")
-                    logging.info("Attempting to create minimal credentials with refresh token")
-                    
-                    try:
-                        minimal_creds_data = {
-                            "client_id": raw_creds_data.get("client_id", CLIENT_ID),
-                            "client_secret": raw_creds_data.get("client_secret", CLIENT_SECRET),
-                            "refresh_token": raw_creds_data["refresh_token"],
-                            "token_uri": "https://oauth2.googleapis.com/token",
-                        }
-                        
-                        credentials = Credentials.from_authorized_user_info(minimal_creds_data, SCOPES)
-                        credentials_from_env = bool(os.getenv("GOOGLE_APPLICATION_CREDENTIALS"))
-                        
-                        # Force refresh since we don't have a valid token
-                        try:
-                            logging.info("Refreshing minimal credentials...")
-                            credentials.refresh(GoogleAuthRequest())
-                            logging.info("Minimal credentials refreshed successfully")
-                            save_credentials(credentials)
-                            return credentials
-                        except Exception as refresh_error:
-                            logging.error(f"Failed to refresh minimal credentials: {refresh_error}")
-                            # Even if refresh fails, return the credentials - they might still work
-                            return credentials
-                            
-                    except Exception as minimal_error:
-                        logging.error(f"Failed to create minimal credentials: {minimal_error}")
-                        # Fall through to new login as last resort
-            else:
-                logging.warning("No refresh token found in credentials file")
-                # Fall through to new login
-                
-        except Exception as e:
-            logging.error(f"Failed to read credentials file {CREDENTIAL_FILE}: {e}")
-            # Fall through to new login only if file is completely unreadable
-
-    # Only start OAuth flow if explicitly allowed
-    if not allow_oauth_flow:
-        logging.info("OAuth flow not allowed - returning None (credentials will be required on first request)")
+    if not env_creds_json:
         return None
+
+    try:
+        raw_data = json.loads(env_creds_json)
+    except json.JSONDecodeError as e:
+        logger.error(f"Failed to parse GEMINI_CREDENTIALS JSON: {e}")
+        return None
+
+    if not raw_data.get("refresh_token"):
+        logger.warning("No refresh_token in environment credentials")
+        return None
+
+    logger.info("Loading credentials from environment variable")
+
+    # Try normal parsing first
+    creds = _create_credentials_from_data(raw_data, "environment")
+    if creds:
+        _credentials_from_env = True
+        if creds.expired:
+            _refresh_credentials(creds)
+        return creds
+
+    # Try minimal credentials as fallback
+    creds = _create_minimal_credentials(raw_data)
+    if creds:
+        _credentials_from_env = True
+        _refresh_credentials(creds)
+        return creds
+
+    return None
+
+
+def _load_credentials_from_file() -> Optional[Credentials]:
+    """Load credentials from credential file."""
+    global _credentials_from_env
+
+    if not os.path.exists(CREDENTIAL_FILE):
+        return None
+
+    try:
+        with open(CREDENTIAL_FILE, "r") as f:
+            raw_data = json.load(f)
+    except (IOError, json.JSONDecodeError) as e:
+        logger.error(f"Failed to read credentials file: {e}")
+        return None
+
+    if not raw_data.get("refresh_token"):
+        logger.warning("No refresh_token in credentials file")
+        return None
+
+    logger.info("Loading credentials from file")
+
+    # Try normal parsing first
+    creds = _create_credentials_from_data(raw_data, "file")
+    if creds:
+        _credentials_from_env = bool(os.getenv("GOOGLE_APPLICATION_CREDENTIALS"))
+        if creds.expired and _refresh_credentials(creds):
+            save_credentials(creds)
+        return creds
+
+    # Try minimal credentials as fallback
+    creds = _create_minimal_credentials(raw_data)
+    if creds:
+        _credentials_from_env = bool(os.getenv("GOOGLE_APPLICATION_CREDENTIALS"))
+        if _refresh_credentials(creds):
+            save_credentials(creds)
+        return creds
+
+    return None
+
+
+def _run_oauth_flow() -> Optional[Credentials]:
+    """Run interactive OAuth flow."""
+    global _credentials_from_env
 
     client_config = {
         "installed": {
             "client_id": CLIENT_ID,
             "client_secret": CLIENT_SECRET,
-            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-            "token_uri": "https://oauth2.googleapis.com/token",
+            "auth_uri": AUTH_URI,
+            "token_uri": TOKEN_URI,
         }
     }
-    
+
     flow = Flow.from_client_config(
-        client_config,
-        scopes=SCOPES,
-        redirect_uri="http://localhost:8080"
+        client_config, scopes=SCOPES, redirect_uri=OAUTH_REDIRECT_URI
     )
-    
     flow.oauth2session.scope = SCOPES
-    
+
     auth_url, _ = flow.authorization_url(
-        access_type="offline",
-        prompt="consent",
-        include_granted_scopes='true'
+        access_type="offline", prompt="consent", include_granted_scopes="true"
     )
-    print(f"\n{'='*80}")
-    print(f"AUTHENTICATION REQUIRED")
-    print(f"{'='*80}")
-    print(f"Please open this URL in your browser to log in:")
-    print(f"{auth_url}")
-    print(f"{'='*80}\n")
-    logging.info(f"Please open this URL in your browser to log in: {auth_url}")
-    
-    server = HTTPServer(("", 8080), _OAuthCallbackHandler)
+
+    print(f"\n{'=' * 60}")
+    print("AUTHENTICATION REQUIRED")
+    print(f"{'=' * 60}")
+    print(f"Please open this URL in your browser:\n{auth_url}")
+    print(f"{'=' * 60}\n")
+    logger.info(f"OAuth URL: {auth_url}")
+
+    server = HTTPServer(("", OAUTH_CALLBACK_PORT), _OAuthCallbackHandler)
     server.handle_request()
-    
+
     auth_code = _OAuthCallbackHandler.auth_code
     if not auth_code:
         return None
 
-    import oauthlib.oauth2.rfc6749.parameters
-    original_validate = oauthlib.oauth2.rfc6749.parameters.validate_token_parameters
-    
-    def patched_validate(params):
-        try:
-            return original_validate(params)
-        except Warning:
-            pass
-    
-    oauthlib.oauth2.rfc6749.parameters.validate_token_parameters = patched_validate
-    
+    # Patch oauthlib to ignore scope warnings
+    import oauthlib.oauth2.rfc6749.parameters as oauth_params
+
+    original_validate = oauth_params.validate_token_parameters
+    oauth_params.validate_token_parameters = lambda p: None
+
     try:
         flow.fetch_token(code=auth_code)
-        credentials = flow.credentials
-        credentials_from_env = False  # Mark as file-based credentials
-        save_credentials(credentials)
-        logging.info("Authentication successful! Credentials saved.")
-        return credentials
+        creds = flow.credentials
+        _credentials_from_env = False
+        save_credentials(creds)
+        logger.info("Authentication successful!")
+        return creds
     except Exception as e:
-        logging.error(f"Authentication failed: {e}")
+        logger.error(f"Authentication failed: {e}")
         return None
     finally:
-        oauthlib.oauth2.rfc6749.parameters.validate_token_parameters = original_validate
+        oauth_params.validate_token_parameters = original_validate
 
-def onboard_user(creds, project_id):
-    """Ensures the user is onboarded, matching gemini-cli setupUser behavior."""
-    global onboarding_complete
-    if onboarding_complete:
+
+def get_credentials(allow_oauth_flow: bool = True) -> Optional[Credentials]:
+    """
+    Load or obtain OAuth credentials.
+
+    Args:
+        allow_oauth_flow: Whether to run interactive OAuth if needed
+
+    Returns:
+        Credentials object or None if unavailable
+    """
+    global _credentials
+
+    if _credentials and _credentials.token:
+        return _credentials
+
+    # Try environment variable first
+    _credentials = _load_credentials_from_env()
+    if _credentials:
+        return _credentials
+
+    # Try credentials file
+    _credentials = _load_credentials_from_file()
+    if _credentials:
+        return _credentials
+
+    # Run OAuth flow if allowed
+    if allow_oauth_flow:
+        _credentials = _run_oauth_flow()
+        return _credentials
+
+    logger.info("OAuth flow not allowed, returning None")
+    return None
+
+
+def onboard_user(creds: Credentials, project_id: str) -> None:
+    """
+    Ensure user is onboarded to Code Assist.
+
+    Args:
+        creds: Valid credentials
+        project_id: Google Cloud project ID
+
+    Raises:
+        Exception: If onboarding fails
+    """
+    global _onboarding_complete
+
+    if _onboarding_complete:
         return
 
     if creds.expired and creds.refresh_token:
@@ -442,157 +500,151 @@ def onboard_user(creds, project_id):
             creds.refresh(GoogleAuthRequest())
             save_credentials(creds)
         except Exception as e:
-            raise Exception(f"Failed to refresh credentials during onboarding: {str(e)}")
+            raise Exception(f"Failed to refresh credentials: {e}")
+
     headers = {
         "Authorization": f"Bearer {creds.token}",
         "Content-Type": "application/json",
         "User-Agent": get_user_agent(),
     }
-    
-    load_assist_payload = {
+
+    payload = {
         "cloudaicompanionProject": project_id,
         "metadata": get_client_metadata(project_id),
     }
-    
+
     try:
-        import requests
         resp = requests.post(
             f"{CODE_ASSIST_ENDPOINT}/v1internal:loadCodeAssist",
-            data=json.dumps(load_assist_payload),
+            json=payload,
             headers=headers,
         )
         resp.raise_for_status()
         load_data = resp.json()
-        
-        tier = None
-        if load_data.get("currentTier"):
-            tier = load_data["currentTier"]
-        else:
+
+        # Get tier info
+        tier = load_data.get("currentTier")
+        if not tier:
             for allowed_tier in load_data.get("allowedTiers", []):
                 if allowed_tier.get("isDefault"):
                     tier = allowed_tier
                     break
-            
             if not tier:
-                tier = {
-                    "name": "",
-                    "description": "",
-                    "id": "legacy-tier",
-                    "userDefinedCloudaicompanionProject": True,
-                }
+                tier = {"id": "legacy-tier", "userDefinedCloudaicompanionProject": True}
 
         if tier.get("userDefinedCloudaicompanionProject") and not project_id:
-            raise ValueError("This account requires setting the GOOGLE_CLOUD_PROJECT env var.")
+            raise ValueError("GOOGLE_CLOUD_PROJECT environment variable required.")
 
         if load_data.get("currentTier"):
-            onboarding_complete = True
+            _onboarding_complete = True
             return
 
-        onboard_req_payload = {
+        # Run onboarding
+        onboard_payload = {
             "tierId": tier.get("id"),
             "cloudaicompanionProject": project_id,
             "metadata": get_client_metadata(project_id),
         }
 
-        while True:
+        for _ in range(ONBOARD_MAX_RETRIES):
             onboard_resp = requests.post(
                 f"{CODE_ASSIST_ENDPOINT}/v1internal:onboardUser",
-                data=json.dumps(onboard_req_payload),
+                json=onboard_payload,
                 headers=headers,
             )
             onboard_resp.raise_for_status()
             lro_data = onboard_resp.json()
 
             if lro_data.get("done"):
-                onboarding_complete = True
-                break
-            
-            time.sleep(5)
+                _onboarding_complete = True
+                return
+
+            time.sleep(ONBOARD_POLL_INTERVAL)
+
+        raise Exception("Onboarding timed out")
 
     except requests.exceptions.HTTPError as e:
-        raise Exception(f"User onboarding failed. Please check your Google Cloud project permissions and try again. Error: {e.response.text if hasattr(e, 'response') else str(e)}")
-    except Exception as e:
-        raise Exception(f"User onboarding failed due to an unexpected error: {str(e)}")
+        error_text = e.response.text if hasattr(e, "response") else str(e)
+        raise Exception(f"Onboarding failed: {error_text}")
 
-def get_user_project_id(creds):
-    """Gets the user's project ID matching gemini-cli setupUser logic."""
-    global user_project_id
-    
-    # Priority 1: Check environment variable first (always check, even if user_project_id is set)
+
+def get_user_project_id(creds: Credentials) -> str:
+    """
+    Get the user's Google Cloud project ID.
+
+    Args:
+        creds: Valid credentials
+
+    Returns:
+        Project ID string
+
+    Raises:
+        Exception: If project ID cannot be determined
+    """
+    global _user_project_id
+
+    # Priority 1: Environment variable
     env_project_id = os.getenv("GOOGLE_CLOUD_PROJECT")
     if env_project_id:
-        logging.info(f"Using project ID from GOOGLE_CLOUD_PROJECT environment variable: {env_project_id}")
-        user_project_id = env_project_id
-        save_credentials(creds, user_project_id)
-        return user_project_id
-    
-    # If we already have a cached project_id and no env var override, use it
-    if user_project_id:
-        logging.info(f"Using cached project ID: {user_project_id}")
-        return user_project_id
+        logger.info(f"Using project ID from env: {env_project_id}")
+        _user_project_id = env_project_id
+        save_credentials(creds, _user_project_id)
+        return _user_project_id
 
-    # Priority 2: Check cached project ID in credential file
+    # Priority 2: Cached value
+    if _user_project_id:
+        logger.info(f"Using cached project ID: {_user_project_id}")
+        return _user_project_id
+
+    # Priority 3: Credential file
     if os.path.exists(CREDENTIAL_FILE):
         try:
             with open(CREDENTIAL_FILE, "r") as f:
                 creds_data = json.load(f)
-                cached_project_id = creds_data.get("project_id")
-                if cached_project_id:
-                    logging.info(f"Using cached project ID from credential file: {cached_project_id}")
-                    user_project_id = cached_project_id
-                    return user_project_id
-        except Exception as e:
-            logging.warning(f"Could not read project_id from credential file: {e}")
+                cached = creds_data.get("project_id")
+                if cached:
+                    logger.info(f"Using project ID from file: {cached}")
+                    _user_project_id = cached
+                    return _user_project_id
+        except (IOError, json.JSONDecodeError) as e:
+            logger.warning(f"Could not read project_id from file: {e}")
 
-    # Priority 3: Make API call to discover project ID
-    # Ensure we have valid credentials for the API call
+    # Priority 4: API discovery
     if creds.expired and creds.refresh_token:
         try:
-            logging.info("Refreshing credentials before project ID discovery...")
             creds.refresh(GoogleAuthRequest())
             save_credentials(creds)
-            logging.info("Credentials refreshed successfully for project ID discovery")
         except Exception as e:
-            logging.error(f"Failed to refresh credentials while getting project ID: {e}")
-            # Continue with existing credentials - they might still work
-    
+            logger.error(f"Failed to refresh credentials: {e}")
+
     if not creds.token:
-        raise Exception("No valid access token available for project ID discovery")
-    
+        raise Exception("No valid access token for project ID discovery")
+
     headers = {
         "Authorization": f"Bearer {creds.token}",
         "Content-Type": "application/json",
         "User-Agent": get_user_agent(),
     }
-    
-    probe_payload = {
-        "metadata": get_client_metadata(),
-    }
 
     try:
-        import requests
-        logging.info("Attempting to discover project ID via API call...")
+        logger.info("Discovering project ID via API...")
         resp = requests.post(
             f"{CODE_ASSIST_ENDPOINT}/v1internal:loadCodeAssist",
-            data=json.dumps(probe_payload),
+            json={"metadata": get_client_metadata()},
             headers=headers,
         )
         resp.raise_for_status()
         data = resp.json()
-        discovered_project_id = data.get("cloudaicompanionProject")
-        if not discovered_project_id:
-            raise ValueError("Could not find 'cloudaicompanionProject' in loadCodeAssist response.")
 
-        logging.info(f"Discovered project ID via API: {discovered_project_id}")
-        user_project_id = discovered_project_id
-        save_credentials(creds, user_project_id)
-        
-        return user_project_id
+        discovered = data.get("cloudaicompanionProject")
+        if not discovered:
+            raise ValueError("Could not find project ID in API response")
+
+        logger.info(f"Discovered project ID: {discovered}")
+        _user_project_id = discovered
+        save_credentials(creds, _user_project_id)
+        return _user_project_id
+
     except requests.exceptions.HTTPError as e:
-        logging.error(f"HTTP error during project ID discovery: {e}")
-        if hasattr(e, 'response') and e.response:
-            logging.error(f"Response status: {e.response.status_code}, body: {e.response.text}")
-        raise Exception(f"Failed to discover project ID via API: {e}")
-    except Exception as e:
-        logging.error(f"Unexpected error during project ID discovery: {e}")
-        raise Exception(f"Failed to discover project ID: {e}")
+        error_text = e.response.text if hasattr(e, "response") else str(e)
+        raise Exception(f"Failed to discover project ID: {error_text}")

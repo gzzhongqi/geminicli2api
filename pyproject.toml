@@ -1,0 +1,17 @@
+[project]
+name = "geminicli2api"
+version = "0.1.0"
+description = "Gemini CLI to API proxy"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "requests",
+    "python-dotenv",
+    "google-auth-oauthlib",
+    "pydantic",
+]
+
+[project.scripts]
+geminicli2api = "run:main"
