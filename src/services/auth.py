@@ -411,6 +411,10 @@ def authenticate_user(request: Request) -> str:
     Raises:
         HTTPException: If authentication fails
     """
+    # If no password is set, skip authentication
+    if not GEMINI_AUTH_PASSWORD:
+        return "anonymous"
+
     # Check API key in query parameters
     api_key = request.query_params.get("key")
     if api_key and api_key == GEMINI_AUTH_PASSWORD:

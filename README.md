@@ -16,6 +16,9 @@ Access Google Gemini models using [Gemini CLI](https://github.com/google-gemini/
 ## Quick Start
 
 ```bash
+# Install uv (if not already installed)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
 # Install dependencies
 uv sync
 
@@ -43,7 +46,7 @@ docker run -p 8888:8888 \
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `GEMINI_AUTH_PASSWORD` | No | Password for API access (default: `123456`) |
+| `GEMINI_AUTH_PASSWORD` | No | Password for API access (if empty, no auth required) |
 | `GOOGLE_APPLICATION_CREDENTIALS` | No* | Path to OAuth credentials file |
 | `GEMINI_CREDENTIALS` | No* | OAuth credentials as JSON string |
 
@@ -121,6 +124,16 @@ Variants (2.5 models):
 - `-search` - Google Search grounding
 - `-nothinking` - Minimal reasoning
 - `-maxthinking` - Maximum reasoning budget
+
+## Development
+
+```bash
+# Install with dev dependencies
+uv sync --extra dev
+
+# Run tests
+uv run pytest tests/ -v
+```
 
 ## License
 

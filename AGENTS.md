@@ -4,10 +4,11 @@
 - Install: `uv sync`
 - Run locally: `uv run python run.py` (port 8888)
 - Docker: `docker-compose up -d` or `docker build -t geminicli2api . && docker run -p 8888:8888 geminicli2api`
-- No test suite exists; no lint/format tooling configured
+- Run tests: `uv sync --extra dev && uv run pytest tests/ -v`
 
 ## Project Structure
 - `src/`: Main package (config, routes, transformers, auth, models, utils)
+- `tests/`: Test suite (pytest)
 - `run.py`: Entry point
 - Config via environment variables (see `.env.example`)
 
