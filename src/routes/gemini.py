@@ -88,18 +88,7 @@ async def gemini_list_models(request: Request) -> Response:
     "/{full_path:path}",
     methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
     response_model=None,
-    tags=["Gemini Native"],
-    summary="Gemini API proxy",
-    description="""
-Native Gemini API passthrough proxy.
-
-Forwards requests directly to the Gemini API. Supports all native Gemini endpoints:
-
-- `POST /v1beta/models/{model}:generateContent` - Generate content
-- `POST /v1beta/models/{model}:streamGenerateContent` - Stream generate content
-
-The request body should be in native Gemini format.
-""",
+    include_in_schema=False,
 )
 async def gemini_proxy(
     request: Request,
