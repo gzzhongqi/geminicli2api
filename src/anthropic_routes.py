@@ -136,12 +136,16 @@ async def anthropic_messages(
 
                     async for chunk in response.body_iterator:
                         if isinstance(chunk, bytes):
-                            chunk = chunk.decode("utf-8", "ignore")
+                            chunk_str = chunk.decode("utf-8", "ignore")
+                        elif isinstance(chunk, memoryview):
+                            chunk_str = bytes(chunk).decode("utf-8", "ignore")
+                        else:
+                            chunk_str = str(chunk)
 
-                        if chunk.startswith("data: "):
+                        if chunk_str.startswith("data: "):
                             try:
                                 # Parse the Gemini streaming chunk
-                                chunk_data = chunk[6:]  # Remove 'data: ' prefix
+                                chunk_data = chunk_str[6:]  # Remove 'data: ' prefix
                                 gemini_chunk = json.loads(chunk_data)
 
                                 # Check if this is an error chunk
@@ -190,13 +194,19 @@ async def anthropic_messages(
                         try:
                             error_body = response.body
                             if isinstance(error_body, bytes):
-                                error_body = error_body.decode("utf-8", "ignore")
-                            error_data = json.loads(error_body)
+                                error_body_str = error_body.decode("utf-8", "ignore")
+                            elif isinstance(error_body, memoryview):
+                                error_body_str = bytes(error_body).decode(
+                                    "utf-8", "ignore"
+                                )
+                            else:
+                                error_body_str = str(error_body)
+                            error_data = json.loads(error_body_str)
                             if "error" in error_data:
                                 error_msg = error_data["error"].get(
                                     "message", error_msg
                                 )
-                        except:
+                        except (json.JSONDecodeError, KeyError, TypeError):
                             pass
 
                     logging.error(f"Streaming request failed: {error_msg}")
@@ -235,9 +245,13 @@ async def anthropic_messages(
                 try:
                     error_body = response.body
                     if isinstance(error_body, bytes):
-                        error_body = error_body.decode("utf-8", "ignore")
+                        error_body_str = error_body.decode("utf-8", "ignore")
+                    elif isinstance(error_body, memoryview):
+                        error_body_str = bytes(error_body).decode("utf-8", "ignore")
+                    else:
+                        error_body_str = str(error_body)
 
-                    error_data = json.loads(error_body)
+                    error_data = json.loads(error_body_str)
                     if "error" in error_data:
                         error_msg = error_data["error"].get("message", error_msg)
                         if response.status_code == 404:
@@ -262,7 +276,14 @@ async def anthropic_messages(
 
             try:
                 # Parse Gemini response and transform to Anthropic format
-                gemini_response = json.loads(response.body)
+                response_body = response.body
+                if isinstance(response_body, bytes):
+                    response_body_str = response_body.decode("utf-8", "ignore")
+                elif isinstance(response_body, memoryview):
+                    response_body_str = bytes(response_body).decode("utf-8", "ignore")
+                else:
+                    response_body_str = str(response_body)
+                gemini_response = json.loads(response_body_str)
                 anthropic_response = gemini_response_to_anthropic(
                     gemini_response, request.model, include_thinking=include_thinking
                 )

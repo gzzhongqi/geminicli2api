@@ -8,12 +8,10 @@ import pytest
 from fastapi import HTTPException
 
 from src.services.auth import (
-    CredentialPool,
     CredentialEntry,
+    CredentialPool,
     authenticate_user,
-    CREDENTIAL_RECOVERY_TIME,
 )
-
 
 # --- Test authenticate_user ---
 

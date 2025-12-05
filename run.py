@@ -1,5 +1,7 @@
 import os
+
 import uvicorn
+
 from src.main import app
 
 if __name__ == "__main__":

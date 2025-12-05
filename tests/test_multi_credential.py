@@ -5,16 +5,13 @@ import os
 import tempfile
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from src.services.auth import (
     CredentialEntry,
-    _load_credential_entry_from_json,
     _load_credential_entry_from_file,
+    _load_credential_entry_from_json,
     _load_multiple_credentials_from_env,
     _load_multiple_credentials_from_files,
     initialize_credential_pool,
-    get_credential_pool,
 )
 
 

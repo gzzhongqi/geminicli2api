@@ -3,24 +3,13 @@
 import json
 import os
 import tempfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from src.cli import (
     CREDENTIALS_DIR,
-    _ensure_credentials_dir,
-    _generate_credential_name,
-    _get_credential_path,
     _get_user_email,
-    _list_credentials,
-    _remove_credential,
-    _save_credential,
-    cmd_auth_export,
-    cmd_auth_list,
-    cmd_auth_remove,
 )
 
 
@@ -176,7 +165,7 @@ class TestSaveCredential:
         mock.token = "test_token"
         mock.refresh_token = "test_refresh_token"
         mock.scopes = ["scope1", "scope2"]
-        mock.expiry = datetime(2024, 12, 31, 23, 59, 59, tzinfo=timezone.utc)
+        mock.expiry = datetime(2024, 12, 31, 23, 59, 59, tzinfo=UTC)
         return mock
 
     @patch("src.cli.CREDENTIALS_DIR")

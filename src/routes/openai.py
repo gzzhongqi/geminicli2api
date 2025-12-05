@@ -44,8 +44,12 @@ def _parse_response_body(response: Response) -> Dict[str, Any]:
     """Parse response body to dict."""
     body = response.body
     if isinstance(body, bytes):
-        body = body.decode("utf-8", "ignore")
-    return json.loads(body)
+        body_str = body.decode("utf-8", "ignore")
+    elif isinstance(body, memoryview):
+        body_str = bytes(body).decode("utf-8", "ignore")
+    else:
+        body_str = str(body)
+    return json.loads(body_str)
 
 
 async def _stream_openai_response(
@@ -89,13 +93,17 @@ async def _stream_openai_response(
 
         async for chunk in response.body_iterator:
             if isinstance(chunk, bytes):
-                chunk = chunk.decode("utf-8", "ignore")
+                chunk_str = chunk.decode("utf-8", "ignore")
+            elif isinstance(chunk, memoryview):
+                chunk_str = bytes(chunk).decode("utf-8", "ignore")
+            else:
+                chunk_str = str(chunk)
 
-            if not chunk.startswith("data: "):
+            if not chunk_str.startswith("data: "):
                 continue
 
             try:
-                gemini_chunk = json.loads(chunk[6:])
+                gemini_chunk = json.loads(chunk_str[6:])
 
                 # Handle error chunk
                 if "error" in gemini_chunk:

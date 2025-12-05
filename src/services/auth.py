@@ -860,6 +860,10 @@ def _run_oauth_flow() -> Optional[Credentials]:
     try:
         flow.fetch_token(code=auth_code)
         creds = flow.credentials
+        # flow.credentials returns OAuth2 Credentials for installed app flow
+        if not isinstance(creds, Credentials):
+            logger.error("Unexpected credentials type from OAuth flow")
+            return None
         _credentials_from_env = False
         save_credentials(creds)
         logger.info("Authentication successful!")
@@ -1343,7 +1347,7 @@ def get_user_project_id(creds: Credentials) -> str:
                 if cached:
                     logger.info(f"Using project ID from file: {cached}")
                     _user_project_id = cached
-                    return _user_project_id
+                    return cached  # Return local variable which is narrowed to str
         except (IOError, json.JSONDecodeError) as e:
             logger.warning(f"Could not read project_id from file: {e}")
 
@@ -1390,7 +1394,7 @@ def get_user_project_id(creds: Credentials) -> str:
         logger.info(f"Discovered project ID: {discovered}")
         _user_project_id = discovered
         save_credentials(creds, _user_project_id)
-        return _user_project_id
+        return discovered  # Return local variable which is narrowed to str
 
     except requests.exceptions.HTTPError as e:
         error_text = e.response.text if hasattr(e, "response") else str(e)

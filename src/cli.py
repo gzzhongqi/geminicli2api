@@ -265,17 +265,21 @@ def _run_oauth_flow() -> Optional[Credentials]:
 
     original_validate_params = oauth_params.validate_token_parameters
     original_parse_token = getattr(oauth_params, "parse_token_response", None)
+    original_parse = None  # Initialize for potential later use
 
     oauth_params.validate_token_parameters = lambda p: None
 
     # Some versions use different validation
     if hasattr(oauth_tokens, "parse_token"):
-        original_parse = oauth_tokens.parse_token
-        oauth_tokens.parse_token = lambda response, scope: response
+        original_parse = oauth_tokens.parse_token  # type: ignore[attr-defined]
+        oauth_tokens.parse_token = lambda response, scope: response  # type: ignore[attr-defined]
 
     try:
         flow.fetch_token(code=auth_code)
         creds = flow.credentials
+        # flow.credentials returns OAuth2 Credentials for installed app flow
+        if not isinstance(creds, Credentials):
+            return None
         return creds
     except KeyError as e:
         # Handle missing 'access_token' in response - try manual token fetch
@@ -319,7 +323,7 @@ def _run_oauth_flow() -> Optional[Credentials]:
     finally:
         oauth_params.validate_token_parameters = original_validate_params
         if hasattr(oauth_tokens, "parse_token"):
-            oauth_tokens.parse_token = original_parse
+            oauth_tokens.parse_token = original_parse  # type: ignore[attr-defined]
 
 
 # --- CLI Commands ---
