@@ -1,4 +1,4 @@
-# geminicli2api
+# Gemini CLI to API
 
 Access Google Gemini models using [Gemini CLI](https://github.com/google-gemini/gemini-cli) authentication. No API key required - just sign in with your Google account.
 

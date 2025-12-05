@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional
 
 # App Info
 APP_VERSION = "1.0.0"
-APP_NAME = "geminicli2api"
+APP_NAME = "Gemini CLI to API"
 
 # API Endpoints
 CODE_ASSIST_ENDPOINT = "https://cloudcode-pa.googleapis.com"
