@@ -11,6 +11,7 @@ Access Google Gemini models using [Gemini CLI](https://github.com/google-gemini/
 - **Multimodal** - Text and image inputs
 - **Google Search Grounding** - Enable with `-search` model suffix
 - **Thinking Control** - `-nothinking` and `-maxthinking` model variants
+- **Multiple Credentials** - Round-robin load balancing with automatic fallback
 
 ## Quick Start
 
@@ -38,6 +39,8 @@ docker run -p 8888:8888 \
 
 ## Configuration
 
+### Single Credential (Default)
+
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `GEMINI_AUTH_PASSWORD` | No | Password for API access (default: `123456`) |
@@ -45,6 +48,26 @@ docker run -p 8888:8888 \
 | `GEMINI_CREDENTIALS` | No* | OAuth credentials as JSON string |
 
 *If no credentials provided, browser OAuth flow will start on first run
+
+### Multiple Credentials (Load Balancing)
+
+For high availability and load distribution, you can configure multiple Gemini CLI credentials:
+
+```bash
+# Option 1: Indexed environment variables
+GEMINI_CREDENTIALS_1='{"refresh_token":"xxx","client_id":"...","client_secret":"..."}'
+GEMINI_CREDENTIALS_2='{"refresh_token":"yyy","client_id":"...","client_secret":"..."}'
+GEMINI_CREDENTIALS_3='{"refresh_token":"zzz","client_id":"...","client_secret":"..."}'
+
+# Option 2: Multiple credential files
+GEMINI_CREDENTIAL_FILES=creds1.json,creds2.json,creds3.json
+```
+
+**How it works:**
+- **Round-robin selection** - Requests are distributed evenly across all credentials
+- **Automatic fallback** - If a credential fails (401, 403, 429), automatically retry with another
+- **Recovery time** - Failed credentials are retried after 5 minutes
+- **Backward compatible** - Single credential setup continues to work
 
 ## API Endpoints
 

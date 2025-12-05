@@ -1,18 +1,34 @@
 """
 Google Gemini API Client - Handles all communication with Google's Gemini API.
+Supports multiple credentials with automatic fallback on failure.
 """
 
 import asyncio
 import json
 import logging
-from typing import Any, AsyncGenerator, Dict, Union
+from typing import Any, AsyncGenerator, Dict, Optional, Tuple, Union
 
 import requests
 from fastapi import Response
 from fastapi.responses import StreamingResponse
 from google.auth.transport.requests import Request as GoogleAuthRequest
+from google.oauth2.credentials import Credentials
 
-from .auth import get_credentials, save_credentials, get_user_project_id, onboard_user
+from .auth import (
+    get_credentials,
+    save_credentials,
+    get_user_project_id,
+    onboard_user,
+    get_next_credential,
+    get_fallback_credential,
+    mark_credential_failed,
+    mark_credential_success,
+    get_credential_project_id,
+    set_credential_project_id,
+    is_credential_onboarded,
+    set_credential_onboarded,
+    get_pool_stats,
+)
 from ..utils import get_user_agent
 from ..models import (
     get_base_model_name,
@@ -28,6 +44,9 @@ from ..config import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Error codes that should trigger credential fallback
+FALLBACK_ERROR_CODES = {401, 403, 429}
 
 
 def _create_json_error_response(message: str, status_code: int) -> Response:
@@ -178,7 +197,9 @@ def send_gemini_request(
     payload: Dict[str, Any], is_streaming: bool = False
 ) -> Union[Response, StreamingResponse]:
     """
-    Send a request to Google's Gemini API.
+    Send a request to Google's Gemini API with multi-credential support.
+
+    Uses round-robin credential selection and automatic fallback on failure.
 
     Args:
         payload: The request payload in Gemini format
@@ -187,20 +208,112 @@ def send_gemini_request(
     Returns:
         FastAPI Response or StreamingResponse object
     """
-    # Get and validate credentials
-    creds = get_credentials()
-    if not creds:
+    # Get credential from pool
+    cred_result = get_next_credential()
+    if not cred_result:
         return _create_json_error_response(
             "Authentication failed. Please restart the proxy to log in.", 500
         )
 
+    creds, cred_index = cred_result
+
+    # Log credential usage for multi-credential mode
+    pool_stats = get_pool_stats()
+    if pool_stats["total"] > 1:
+        logger.info(
+            f"Using credential #{cred_index + 1} of {pool_stats['total']} "
+            f"({pool_stats['available']} available)"
+        )
+
+    # Try to send request with current credential
+    response = _send_request_with_credential(payload, creds, cred_index, is_streaming)
+
+    # Check if we should try fallback
+    if _should_try_fallback(response, cred_index, pool_stats):
+        logger.warning(f"Credential #{cred_index + 1} failed, trying fallback...")
+        mark_credential_failed(cred_index)
+
+        fallback_result = get_fallback_credential(cred_index)
+        if fallback_result:
+            fallback_creds, fallback_index = fallback_result
+            logger.info(f"Retrying with fallback credential #{fallback_index + 1}")
+            response = _send_request_with_credential(
+                payload, fallback_creds, fallback_index, is_streaming
+            )
+
+            if not _is_error_response(response):
+                mark_credential_success(fallback_index)
+    elif not _is_error_response(response):
+        mark_credential_success(cred_index)
+
+    return response
+
+
+def _should_try_fallback(
+    response: Union[Response, StreamingResponse], cred_index: int, pool_stats: dict
+) -> bool:
+    """
+    Determine if we should try a fallback credential.
+
+    Args:
+        response: The response from the first attempt
+        cred_index: Index of the credential used
+        pool_stats: Credential pool statistics
+
+    Returns:
+        True if fallback should be attempted
+    """
+    # Only try fallback if we have multiple credentials
+    if pool_stats["total"] <= 1:
+        return False
+
+    # Single credential mode doesn't support fallback
+    if cred_index == -1:
+        return False
+
+    # Check if response indicates an error that warrants fallback
+    if isinstance(response, Response):
+        return response.status_code in FALLBACK_ERROR_CODES
+    elif isinstance(response, StreamingResponse):
+        return response.status_code in FALLBACK_ERROR_CODES
+
+    return False
+
+
+def _is_error_response(response: Union[Response, StreamingResponse]) -> bool:
+    """Check if response is an error."""
+    if isinstance(response, (Response, StreamingResponse)):
+        return response.status_code >= 400
+    return False
+
+
+def _send_request_with_credential(
+    payload: Dict[str, Any],
+    creds: Credentials,
+    cred_index: int,
+    is_streaming: bool,
+) -> Union[Response, StreamingResponse]:
+    """
+    Send a request using a specific credential.
+
+    Args:
+        payload: The request payload
+        creds: Credentials to use
+        cred_index: Index of the credential (-1 for single credential mode)
+        is_streaming: Whether this is a streaming request
+
+    Returns:
+        Response or StreamingResponse
+    """
     # Refresh credentials if needed
     if creds.expired and creds.refresh_token:
         try:
             creds.refresh(GoogleAuthRequest())
-            save_credentials(creds)
+            if cred_index == -1:
+                save_credentials(creds)
+            logger.debug(f"Refreshed credential #{cred_index + 1}")
         except Exception as e:
-            logger.error(f"Token refresh failed: {e}")
+            logger.error(f"Token refresh failed for credential #{cred_index + 1}: {e}")
             return _create_json_error_response(
                 "Token refresh failed. Please restart the proxy to re-authenticate.",
                 500,
@@ -210,12 +323,19 @@ def send_gemini_request(
             "No access token. Please restart the proxy to re-authenticate.", 500
         )
 
-    # Get project ID and onboard user
-    proj_id = get_user_project_id(creds)
+    # Get project ID
+    proj_id = _get_project_id_for_credential(creds, cred_index)
     if not proj_id:
         return _create_json_error_response("Failed to get user project ID.", 500)
 
-    onboard_user(creds, proj_id)
+    # Onboard user if needed
+    if not is_credential_onboarded(cred_index):
+        try:
+            onboard_user(creds, proj_id)
+            set_credential_onboarded(cred_index)
+        except Exception as e:
+            logger.error(f"Onboarding failed for credential #{cred_index + 1}: {e}")
+            return _create_json_error_response(f"Onboarding failed: {e}", 500)
 
     # Build final payload
     final_payload = {
@@ -259,6 +379,35 @@ def send_gemini_request(
     except Exception as e:
         logger.error(f"Unexpected error: {e}")
         return _create_json_error_response(f"Unexpected error: {e}", 500)
+
+
+def _get_project_id_for_credential(
+    creds: Credentials, cred_index: int
+) -> Optional[str]:
+    """
+    Get project ID for a specific credential.
+
+    Args:
+        creds: The credentials
+        cred_index: Credential index
+
+    Returns:
+        Project ID or None
+    """
+    # Check if credential has cached project ID
+    cached_proj_id = get_credential_project_id(cred_index)
+    if cached_proj_id:
+        return cached_proj_id
+
+    # Use global project ID discovery
+    try:
+        proj_id = get_user_project_id(creds)
+        if proj_id and cred_index != -1:
+            set_credential_project_id(cred_index, proj_id)
+        return proj_id
+    except Exception as e:
+        logger.error(f"Failed to get project ID: {e}")
+        return None
 
 
 def build_gemini_payload_from_openai(openai_payload: Dict[str, Any]) -> Dict[str, Any]:
