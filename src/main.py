@@ -10,6 +10,7 @@ from typing import Any, Dict
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 
+from .anthropic_routes import router as anthropic_router
 from .routes.gemini import router as gemini_router
 from .routes.openai import router as openai_router
 from .services.auth import get_credentials, get_user_project_id, onboard_user
@@ -114,12 +115,15 @@ async def root() -> Dict[str, Any]:
     """Root endpoint with API information."""
     return {
         "name": APP_NAME,
-        "description": "OpenAI-compatible API proxy for Google's Gemini models",
+        "description": "OpenAI and Anthropic compatible API proxy for Google's Gemini models",
         "version": APP_VERSION,
         "endpoints": {
             "openai_compatible": {
                 "chat_completions": "/v1/chat/completions",
                 "models": "/v1/models",
+            },
+            "anthropic_compatible": {
+                "messages": "/v1/messages",
             },
             "native_gemini": {
                 "models": "/v1beta/models",
@@ -139,4 +143,5 @@ async def health_check() -> Dict[str, str]:
 
 
 app.include_router(openai_router)
+app.include_router(anthropic_router)
 app.include_router(gemini_router)
