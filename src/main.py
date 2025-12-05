@@ -5,10 +5,11 @@ Main FastAPI application for Geminicli2api.
 import logging
 import os
 from contextlib import asynccontextmanager
-from typing import Any, Dict
+from typing import Dict
 
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
 
 from .routes import anthropic_router, gemini_router, openai_router
 from .services.auth import (
@@ -92,6 +93,54 @@ def _initialize_credentials() -> None:
             logger.error(f"Authentication error: {e}")
 
 
+API_DESCRIPTION = """
+**Geminicli2api** is a proxy server that provides OpenAI and Anthropic-compatible APIs 
+for Google's Gemini models.
+
+## Features
+
+- **OpenAI-compatible** `/v1/chat/completions` endpoint
+- **Anthropic-compatible** `/v1/messages` endpoint  
+- **Native Gemini** API passthrough
+- Multi-credential support with automatic failover
+- Streaming responses
+
+## Authentication
+
+All endpoints (except `/health` and `/v1/models`) require authentication via 
+`Authorization: Bearer <token>` header. The token should be your Google OAuth access token.
+
+## Model Mapping
+
+| Request Model | Gemini Model |
+|--------------|--------------|
+| `gpt-4o`, `gpt-4` | `gemini-2.0-flash` |
+| `gpt-4o-mini`, `gpt-3.5-turbo` | `gemini-2.0-flash-lite` |
+| `o1`, `o1-pro` | `gemini-2.5-pro` |
+| `o3`, `o3-mini` | `gemini-2.5-flash` |
+| `claude-*` | `gemini-2.5-flash` |
+"""
+
+OPENAPI_TAGS = [
+    {
+        "name": "OpenAI Compatible",
+        "description": "OpenAI-compatible endpoints for chat completions and models.",
+    },
+    {
+        "name": "Anthropic Compatible",
+        "description": "Anthropic Claude-compatible endpoint for messages.",
+    },
+    {
+        "name": "Gemini Native",
+        "description": "Native Google Gemini API passthrough endpoints.",
+    },
+    {
+        "name": "Health",
+        "description": "Health check and status endpoints.",
+    },
+]
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan handler."""
@@ -105,7 +154,16 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title=APP_NAME,
     version=APP_VERSION,
+    description=API_DESCRIPTION,
     lifespan=lifespan,
+    redoc_url=None,
+    openapi_tags=OPENAPI_TAGS,
+    swagger_ui_parameters={
+        "defaultModelsExpandDepth": -1,
+        "docExpansion": "list",
+        "filter": True,
+        "tryItOutEnabled": True,
+    },
 )
 
 # CORS middleware
@@ -132,33 +190,13 @@ async def handle_preflight(request: Request, full_path: str) -> Response:
     )
 
 
-@app.get("/")
-async def root() -> Dict[str, Any]:
-    """Root endpoint with API information."""
-    return {
-        "name": APP_NAME,
-        "description": "OpenAI and Anthropic compatible API proxy for Google's Gemini models",
-        "version": APP_VERSION,
-        "endpoints": {
-            "openai_compatible": {
-                "chat_completions": "/v1/chat/completions",
-                "models": "/v1/models",
-            },
-            "anthropic_compatible": {
-                "messages": "/v1/messages",
-            },
-            "native_gemini": {
-                "models": "/v1beta/models",
-                "generate": "/v1beta/models/{model}:generateContent",
-                "stream": "/v1beta/models/{model}:streamGenerateContent",
-            },
-            "health": "/health",
-        },
-        "authentication": "Required for all endpoints except root and health",
-    }
+@app.get("/", include_in_schema=False)
+async def root() -> RedirectResponse:
+    """Redirect root to API documentation."""
+    return RedirectResponse(url="/docs")
 
 
-@app.get("/health")
+@app.get("/health", tags=["Health"])
 async def health_check() -> Dict[str, str]:
     """Health check endpoint."""
     return {"status": "healthy", "service": APP_NAME}

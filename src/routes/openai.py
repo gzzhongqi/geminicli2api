@@ -187,7 +187,26 @@ def _handle_non_streaming_response(
         return _create_error_response(f"Failed to process response: {e}", 500)
 
 
-@router.post("/v1/chat/completions", response_model=None)
+@router.post(
+    "/v1/chat/completions",
+    response_model=None,
+    tags=["OpenAI Compatible"],
+    summary="Create chat completion",
+    description="""
+Create a chat completion using OpenAI-compatible format.
+
+**Model Mapping:**
+- `gpt-4o`, `gpt-4` → `gemini-2.0-flash`
+- `gpt-4o-mini`, `gpt-3.5-turbo` → `gemini-2.0-flash-lite`  
+- `o1`, `o1-pro` → `gemini-2.5-pro`
+- `o3`, `o3-mini` → `gemini-2.5-flash`
+
+**Streaming:** Set `stream: true` for Server-Sent Events (SSE) streaming.
+
+**Thinking Models:** Use `o1` or `o3` series models with `reasoning_effort` parameter
+for extended thinking capabilities.
+""",
+)
 async def openai_chat_completions(
     request: ChatCompletionRequest,
     username: str = Depends(authenticate_user),
@@ -216,7 +235,19 @@ async def openai_chat_completions(
         return _create_error_response(f"Request failed: {e}", 500)
 
 
-@router.get("/v1/models", response_model=None)
+@router.get(
+    "/v1/models",
+    response_model=None,
+    tags=["OpenAI Compatible"],
+    summary="List available models",
+    description="""
+List all available Gemini models in OpenAI-compatible format.
+
+**No authentication required** for this endpoint.
+
+Returns model information including capabilities and permissions.
+""",
+)
 async def openai_list_models() -> Union[Dict[str, Any], Response]:
     """OpenAI-compatible models endpoint. No authentication required."""
     try:

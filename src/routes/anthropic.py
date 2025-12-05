@@ -73,7 +73,29 @@ def authenticate_anthropic(
     )
 
 
-@router.post("/v1/messages")
+@router.post(
+    "/v1/messages",
+    tags=["Anthropic Compatible"],
+    summary="Create a message",
+    description="""
+Create a message using Anthropic Claude-compatible format.
+
+**Model Mapping:** All Claude models are mapped to `gemini-2.5-flash`.
+
+**Authentication:** Requires either:
+- `x-api-key` header (Anthropic style)
+- `Authorization: Bearer <token>` header
+
+**Streaming:** Set `stream: true` for Server-Sent Events (SSE) streaming
+with Anthropic-style events (`message_start`, `content_block_delta`, etc.).
+
+**Extended Thinking:** Enable with `thinking: {type: "enabled", budget_tokens: 4096}`
+to receive model reasoning in the response.
+
+**Tool Use:** Define tools in the `tools` array and receive `tool_use` content blocks
+when the model wants to call a tool.
+""",
+)
 async def anthropic_messages(
     request: AnthropicMessagesRequest,
     http_request: Request,
