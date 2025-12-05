@@ -1,24 +1,38 @@
-version: '3.8'
-
 services:
   geminicli2api:
     build: .
     ports:
       - "${PORT:-8888}:${PORT:-8888}"
     environment:
+      # Required: API password for authentication
       - GEMINI_AUTH_PASSWORD=${GEMINI_AUTH_PASSWORD:-your_password_here}
+
+      # Single credential (JSON string)
       - GEMINI_CREDENTIALS=${GEMINI_CREDENTIALS:-}
+
+      # Multi-credential support (JSON strings, indexed from 1)
+      - GEMINI_CREDENTIALS_1=${GEMINI_CREDENTIALS_1:-}
+      - GEMINI_CREDENTIALS_2=${GEMINI_CREDENTIALS_2:-}
+      - GEMINI_CREDENTIALS_3=${GEMINI_CREDENTIALS_3:-}
+      - GEMINI_CREDENTIALS_4=${GEMINI_CREDENTIALS_4:-}
+      - GEMINI_CREDENTIALS_5=${GEMINI_CREDENTIALS_5:-}
+
+      # Alternative: Comma-separated file paths
+      - GEMINI_CREDENTIAL_FILES=${GEMINI_CREDENTIAL_FILES:-}
+
+      # Optional: Override project ID
       - GOOGLE_CLOUD_PROJECT=${GOOGLE_CLOUD_PROJECT:-}
-      - GOOGLE_APPLICATION_CREDENTIALS=${GOOGLE_APPLICATION_CREDENTIALS:-}
+
+      # Server config
       - HOST=${HOST:-0.0.0.0}
       - PORT=${PORT:-8888}
     volumes:
-      # Optional: Mount credentials file if using file-based auth
-      - ${GOOGLE_APPLICATION_CREDENTIALS:-/dev/null}:/app/${GOOGLE_APPLICATION_CREDENTIALS:-oauth_creds.json}:ro
+      # Mount credentials directory if using file-based auth
+      - ${CREDENTIALS_DIR:-./credentials}:/app/credentials:ro
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "sh", "-c", "curl -f http://localhost:${PORT:-8888}/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:${PORT:-8888}/health"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 40s
+      start_period: 10s
