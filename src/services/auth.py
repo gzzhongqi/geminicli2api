@@ -1177,6 +1177,69 @@ def onboard_user(creds: Credentials, project_id: str) -> None:
         raise Exception(f"Onboarding failed: {error_text}")
 
 
+def discover_project_id_for_credential(creds: Credentials) -> Optional[str]:
+    """
+    Discover project ID for a specific credential via API.
+
+    Unlike get_user_project_id(), this function does NOT use global cache
+    and always queries the API. Used for multi-credential mode where each
+    credential has its own project ID.
+
+    Args:
+        creds: Valid credentials
+
+    Returns:
+        Project ID or None if discovery fails
+    """
+    # Refresh credentials if needed
+    if creds.expired and creds.refresh_token:
+        try:
+            creds.refresh(GoogleAuthRequest())
+        except Exception as e:
+            logger.error(f"Failed to refresh credentials: {e}")
+            return None
+
+    if not creds.token:
+        logger.error("No valid access token for project ID discovery")
+        return None
+
+    headers = {
+        "Authorization": f"Bearer {creds.token}",
+        "Content-Type": "application/json",
+        "User-Agent": get_user_agent(),
+    }
+
+    try:
+        logger.info("Discovering project ID via API for credential...")
+        resp = requests.post(
+            f"{CODE_ASSIST_ENDPOINT}/v1internal:loadCodeAssist",
+            json={"metadata": get_client_metadata()},
+            headers=headers,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+
+        discovered = data.get("cloudaicompanionProject")
+
+        # If no project ID, try auto-onboarding to free tier
+        if not discovered:
+            logger.info("No project ID in response, attempting auto-onboard...")
+            discovered = _auto_onboard_to_free_tier(creds, headers)
+
+        if discovered:
+            logger.info(f"Discovered project ID: {discovered}")
+
+        return discovered
+
+    except requests.exceptions.HTTPError as e:
+        error_text = e.response.text if hasattr(e, "response") else str(e)
+        logger.error(f"Failed to discover project ID: {error_text}")
+        return None
+    except Exception as e:
+        logger.error(f"Error discovering project ID: {e}")
+        return None
+
+
 def _auto_onboard_to_free_tier(creds: Credentials, headers: dict) -> Optional[str]:
     """
     Automatically onboard user to free tier and return project ID.

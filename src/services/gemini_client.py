@@ -18,6 +18,7 @@ from .auth import (
     get_credentials,
     save_credentials,
     get_user_project_id,
+    discover_project_id_for_credential,
     onboard_user,
     get_next_credential,
     get_fallback_credential,
@@ -399,11 +400,22 @@ def _get_project_id_for_credential(
     if cached_proj_id:
         return cached_proj_id
 
-    # Use global project ID discovery
+    # For multi-credential mode, discover project ID for this specific credential
+    if cred_index != -1:
+        try:
+            proj_id = discover_project_id_for_credential(creds)
+            if proj_id:
+                set_credential_project_id(cred_index, proj_id)
+            return proj_id
+        except Exception as e:
+            logger.error(
+                f"Failed to get project ID for credential #{cred_index + 1}: {e}"
+            )
+            return None
+
+    # Fallback to global project ID discovery (single credential mode)
     try:
         proj_id = get_user_project_id(creds)
-        if proj_id and cred_index != -1:
-            set_credential_project_id(cred_index, proj_id)
         return proj_id
     except Exception as e:
         logger.error(f"Failed to get project ID: {e}")
