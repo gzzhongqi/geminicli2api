@@ -80,7 +80,12 @@ def authenticate_anthropic(
     description="""
 Create a message using Anthropic Claude-compatible format.
 
-**Model Mapping:** All Claude models are mapped to `gemini-2.5-flash`.
+**Models:** Use Gemini model names directly (e.g., `gemini-2.5-pro`, `gemini-2.5-flash`).
+
+**Variants:**
+- `-search` suffix for Google Search grounding
+- `-nothinking` suffix to disable thinking
+- `-maxthinking` suffix for maximum thinking budget
 
 **Authentication:** Requires either:
 - `x-api-key` header (Anthropic style)

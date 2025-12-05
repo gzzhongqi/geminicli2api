@@ -10,6 +10,7 @@ from typing import Dict
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
+from fastapi.openapi.utils import get_openapi
 
 from .routes import anthropic_router, gemini_router, openai_router
 from .services.auth import (
@@ -18,7 +19,7 @@ from .services.auth import (
     initialize_credential_pool,
     onboard_user,
 )
-from .config import APP_NAME, APP_VERSION, CREDENTIAL_FILE
+from .config import APP_NAME, CREDENTIAL_FILE
 
 # Load environment variables
 try:
@@ -94,31 +95,28 @@ def _initialize_credentials() -> None:
 
 
 API_DESCRIPTION = """
-**Geminicli2api** is a proxy server that provides OpenAI and Anthropic-compatible APIs 
+**Geminicli2api** is a proxy server that provides OpenAI and Anthropic-compatible API formats 
 for Google's Gemini models.
 
 ## Features
 
-- **OpenAI-compatible** `/v1/chat/completions` endpoint
-- **Anthropic-compatible** `/v1/messages` endpoint  
+- **OpenAI-compatible** `/v1/chat/completions` endpoint format
+- **Anthropic-compatible** `/v1/messages` endpoint format
 - **Native Gemini** API passthrough
 - Multi-credential support with automatic failover
 - Streaming responses
+- Model variants: `-search` (Google Search), `-nothinking`, `-maxthinking`
 
 ## Authentication
 
 All endpoints (except `/health` and `/v1/models`) require authentication via 
-`Authorization: Bearer <token>` header. The token should be your Google OAuth access token.
+`Authorization: Bearer <token>` header.
 
-## Model Mapping
+## Available Models
 
-| Request Model | Gemini Model |
-|--------------|--------------|
-| `gpt-4o`, `gpt-4` | `gemini-2.0-flash` |
-| `gpt-4o-mini`, `gpt-3.5-turbo` | `gemini-2.0-flash-lite` |
-| `o1`, `o1-pro` | `gemini-2.5-pro` |
-| `o3`, `o3-mini` | `gemini-2.5-flash` |
-| `claude-*` | `gemini-2.5-flash` |
+Use Gemini model names directly (e.g., `gemini-2.5-flash`, `gemini-2.5-pro`).
+
+See `/v1/models` for the full list of available models and variants.
 """
 
 OPENAPI_TAGS = [
@@ -153,7 +151,6 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title=APP_NAME,
-    version=APP_VERSION,
     description=API_DESCRIPTION,
     lifespan=lifespan,
     redoc_url=None,
@@ -205,3 +202,41 @@ async def health_check() -> Dict[str, str]:
 app.include_router(openai_router)
 app.include_router(anthropic_router)
 app.include_router(gemini_router)
+
+
+def custom_openapi():
+    """Custom OpenAPI schema with security scheme for Swagger UI Authorize button."""
+    if app.openapi_schema:
+        return app.openapi_schema
+
+    openapi_schema = get_openapi(
+        title=app.title,
+        version="1.0.0",
+        description=app.description,
+        routes=app.routes,
+        tags=OPENAPI_TAGS,
+    )
+
+    # Add security scheme
+    openapi_schema["components"]["securitySchemes"] = {
+        "BearerAuth": {
+            "type": "http",
+            "scheme": "bearer",
+            "description": "Enter your API token",
+        },
+        "ApiKeyAuth": {
+            "type": "apiKey",
+            "in": "header",
+            "name": "x-api-key",
+            "description": "Anthropic-style API key (for /v1/messages)",
+        },
+    }
+
+    # Apply security globally (optional - endpoints can still be public)
+    openapi_schema["security"] = [{"BearerAuth": []}, {"ApiKeyAuth": []}]
+
+    app.openapi_schema = openapi_schema
+    return app.openapi_schema
+
+
+app.openapi = custom_openapi

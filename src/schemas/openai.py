@@ -30,13 +30,13 @@ class ChatCompletionRequest(BaseModel):
     """
     Request body for OpenAI-compatible chat completions.
 
-    Maps to Gemini models automatically based on the requested model name.
+    Use Gemini model names directly (e.g., gemini-2.5-flash, gemini-2.5-pro).
     """
 
     model: str = Field(
         ...,
-        description="Model ID to use. Mapped to Gemini models (e.g., gpt-4o → gemini-2.0-flash)",
-        examples=["gpt-4o", "gpt-4o-mini", "o1", "o3-mini"],
+        description="Gemini model ID (e.g., gemini-2.5-pro, gemini-2.5-flash)",
+        examples=["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-pro-search"],
     )
     messages: List[ChatMessage] = Field(
         ...,
@@ -108,7 +108,7 @@ class ChatCompletionRequest(BaseModel):
         extra = "allow"
         json_schema_extra = {
             "example": {
-                "model": "gpt-4o",
+                "model": "gemini-2.5-pro",
                 "messages": [
                     {"role": "system", "content": "You are a helpful assistant."},
                     {"role": "user", "content": "Hello!"},

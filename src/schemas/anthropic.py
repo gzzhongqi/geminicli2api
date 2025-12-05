@@ -169,8 +169,7 @@ class MessagesRequest(BaseModel):
     """
     Request body for Anthropic-compatible /v1/messages endpoint.
 
-    Maps to Gemini models automatically. All Claude model names are supported
-    and mapped to appropriate Gemini equivalents.
+    Use Gemini model names directly (e.g., gemini-2.5-flash, gemini-2.5-pro).
 
     Supports:
     - Basic text messages
@@ -182,8 +181,8 @@ class MessagesRequest(BaseModel):
 
     model: str = Field(
         ...,
-        description="Model ID. Claude models are mapped to Gemini (e.g., claude-3-5-sonnet → gemini-2.5-flash)",
-        examples=["claude-3-5-sonnet-20241022", "claude-3-opus-20240229"],
+        description="Gemini model ID (e.g., gemini-2.5-pro, gemini-2.5-flash)",
+        examples=["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-pro-search"],
     )
     messages: List[Message] = Field(
         ...,
@@ -251,9 +250,9 @@ class MessagesRequest(BaseModel):
         extra = "allow"
         json_schema_extra = {
             "example": {
-                "model": "claude-3-5-sonnet-20241022",
+                "model": "gemini-2.5-pro",
                 "max_tokens": 1024,
-                "messages": [{"role": "user", "content": "Hello, Claude!"}],
+                "messages": [{"role": "user", "content": "Hello!"}],
                 "temperature": 0.7,
             }
         }
