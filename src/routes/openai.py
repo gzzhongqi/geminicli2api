@@ -11,15 +11,19 @@ from typing import Any, AsyncGenerator, Dict, Union
 from fastapi import APIRouter, Depends, Response
 from fastapi.responses import StreamingResponse
 
-from .auth import authenticate_user
-from .models import OpenAIChatCompletionRequest
-from .openai_transformers import (
+from ..services.auth import authenticate_user
+from ..services.gemini_client import (
+    send_gemini_request,
+    build_gemini_payload_from_openai,
+)
+from ..schemas import ChatCompletionRequest
+from ..models import SUPPORTED_MODELS
+from ..config import MODEL_CREATED_TIMESTAMP, create_error_response
+from .transformers import (
     openai_request_to_gemini,
     gemini_response_to_openai,
     gemini_stream_chunk_to_openai,
 )
-from .google_api_client import send_gemini_request, build_gemini_payload_from_openai
-from .config import SUPPORTED_MODELS, MODEL_CREATED_TIMESTAMP, create_error_response
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -175,9 +179,9 @@ def _handle_non_streaming_response(
         return _create_error_response(f"Failed to process response: {e}", 500)
 
 
-@router.post("/v1/chat/completions")
+@router.post("/v1/chat/completions", response_model=None)
 async def openai_chat_completions(
-    request: OpenAIChatCompletionRequest,
+    request: ChatCompletionRequest,
     username: str = Depends(authenticate_user),
 ) -> Union[Dict[str, Any], Response, StreamingResponse]:
     """OpenAI-compatible chat completions endpoint."""
@@ -204,7 +208,7 @@ async def openai_chat_completions(
         return _create_error_response(f"Request failed: {e}", 500)
 
 
-@router.get("/v1/models")
+@router.get("/v1/models", response_model=None)
 async def openai_list_models(
     username: str = Depends(authenticate_user),
 ) -> Union[Dict[str, Any], Response]:

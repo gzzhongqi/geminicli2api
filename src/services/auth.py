@@ -19,8 +19,8 @@ from google_auth_oauthlib.flow import Flow
 from google.auth.transport.requests import Request as GoogleAuthRequest
 import requests
 
-from .utils import get_user_agent, get_client_metadata
-from .config import (
+from ..utils import get_user_agent, get_client_metadata
+from ..config import (
     CLIENT_ID,
     CLIENT_SECRET,
     SCOPES,

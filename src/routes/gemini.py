@@ -9,9 +9,13 @@ from typing import Any, Dict, Optional, Union
 from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import StreamingResponse
 
-from .auth import authenticate_user
-from .google_api_client import send_gemini_request, build_gemini_payload_from_native
-from .config import SUPPORTED_MODELS, create_error_response
+from ..services.auth import authenticate_user
+from ..services.gemini_client import (
+    send_gemini_request,
+    build_gemini_payload_from_native,
+)
+from ..models import SUPPORTED_MODELS
+from ..config import create_error_response
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -77,6 +81,7 @@ async def gemini_list_models(
 @router.api_route(
     "/{full_path:path}",
     methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
+    response_model=None,
 )
 async def gemini_proxy(
     request: Request,
@@ -129,12 +134,3 @@ async def gemini_proxy(
     except Exception as e:
         logger.error(f"Proxy error: {e}")
         return _create_json_error_response(f"Proxy error: {e}", 500)
-
-
-@router.get("/v1/models")
-async def gemini_list_models_v1(
-    request: Request,
-    username: str = Depends(authenticate_user),
-) -> Response:
-    """Alternative models endpoint for v1 API version."""
-    return await gemini_list_models(request, username)

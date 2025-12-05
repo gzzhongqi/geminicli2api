@@ -1,5 +1,5 @@
 """
-Google API Client - Handles all communication with Google's Gemini API.
+Google Gemini API Client - Handles all communication with Google's Gemini API.
 """
 
 import asyncio
@@ -13,15 +13,17 @@ from fastapi.responses import StreamingResponse
 from google.auth.transport.requests import Request as GoogleAuthRequest
 
 from .auth import get_credentials, save_credentials, get_user_project_id, onboard_user
-from .utils import get_user_agent
-from .config import (
-    CODE_ASSIST_ENDPOINT,
-    DEFAULT_SAFETY_SETTINGS,
-    STREAMING_RESPONSE_HEADERS,
+from ..utils import get_user_agent
+from ..models import (
     get_base_model_name,
     is_search_model,
     get_thinking_budget,
     should_include_thoughts,
+)
+from ..config import (
+    CODE_ASSIST_ENDPOINT,
+    DEFAULT_SAFETY_SETTINGS,
+    STREAMING_RESPONSE_HEADERS,
     create_error_response,
 )
 

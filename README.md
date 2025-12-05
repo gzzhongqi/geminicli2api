@@ -1,9 +1,10 @@
 # geminicli2api
 
-A FastAPI proxy server that exposes Google's Gemini API through OpenAI-compatible and native Gemini endpoints.
+Access Google Gemini models using [Gemini CLI](https://github.com/google-gemini/gemini-cli) authentication. No API key required - just sign in with your Google account.
 
 ## Features
 
+- **Free Access** - Uses Gemini CLI OAuth, no paid API key needed
 - **OpenAI-Compatible API** - Drop-in replacement for OpenAI chat completions
 - **Native Gemini API** - Direct proxy to Google's Gemini API
 - **Streaming Support** - Real-time streaming for both API formats
@@ -39,12 +40,11 @@ docker run -p 8888:8888 \
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `GEMINI_AUTH_PASSWORD` | Yes | Authentication password for API access |
-| `GOOGLE_APPLICATION_CREDENTIALS` | Yes* | Path to OAuth credentials file |
-| `GEMINI_CREDENTIALS` | Yes* | OAuth credentials as JSON string |
-| `GOOGLE_CLOUD_PROJECT` | No | Google Cloud project ID |
+| `GEMINI_AUTH_PASSWORD` | No | Password for API access (default: `123456`) |
+| `GOOGLE_APPLICATION_CREDENTIALS` | No* | Path to OAuth credentials file |
+| `GEMINI_CREDENTIALS` | No* | OAuth credentials as JSON string |
 
-*One credential source required
+*If no credentials provided, browser OAuth flow will start on first run
 
 ## API Endpoints
 
@@ -62,7 +62,13 @@ docker run -p 8888:8888 \
 
 ## Authentication
 
-Supports multiple methods:
+On first run, the server will open a browser for Google OAuth login. Credentials are saved to `oauth_creds.json` for subsequent runs.
+
+Alternatively, set credentials via environment variables:
+- `GOOGLE_APPLICATION_CREDENTIALS` - Path to OAuth credentials file
+- `GEMINI_CREDENTIALS` - OAuth credentials as JSON string
+
+API authentication supports:
 - Bearer Token: `Authorization: Bearer <password>`
 - Basic Auth: `Authorization: Basic <base64>`
 - Query Parameter: `?key=<password>`
