@@ -5,9 +5,15 @@ from .openai import (
     ChatCompletionRequest,
     ChatMessage,
 )
+from .responses import (
+    ResponsesRequest,
+    ResponsesResponse,
+)
 
 __all__ = [
     "AnthropicMessagesRequest",
     "ChatCompletionRequest",
     "ChatMessage",
+    "ResponsesRequest",
+    "ResponsesResponse",
 ]

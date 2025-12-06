@@ -3,9 +3,11 @@
 from .anthropic import router as anthropic_router
 from .gemini import router as gemini_router
 from .openai import router as openai_router
+from .responses import router as responses_router
 
 __all__ = [
     "anthropic_router",
     "gemini_router",
     "openai_router",
+    "responses_router",
 ]

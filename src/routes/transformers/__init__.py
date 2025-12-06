@@ -12,6 +12,11 @@ from .anthropic import (
     format_sse_event,
     create_anthropic_error,
 )
+from .responses import (
+    responses_request_to_gemini,
+    gemini_response_to_responses,
+    gemini_stream_chunk_to_responses_events,
+)
 
 __all__ = [
     # OpenAI
@@ -24,4 +29,8 @@ __all__ = [
     "AnthropicStreamProcessor",
     "format_sse_event",
     "create_anthropic_error",
+    # Responses API
+    "responses_request_to_gemini",
+    "gemini_response_to_responses",
+    "gemini_stream_chunk_to_responses_events",
 ]

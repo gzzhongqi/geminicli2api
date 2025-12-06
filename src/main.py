@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from fastapi.openapi.utils import get_openapi
 
-from .routes import anthropic_router, gemini_router, openai_router
+from .routes import anthropic_router, gemini_router, openai_router, responses_router
 from .services.auth import (
     get_credentials,
     get_user_project_id,
@@ -200,6 +200,7 @@ async def health_check() -> Dict[str, str]:
 
 
 app.include_router(openai_router)
+app.include_router(responses_router)
 app.include_router(anthropic_router)
 app.include_router(gemini_router)
 
