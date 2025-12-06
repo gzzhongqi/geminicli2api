@@ -7,7 +7,7 @@ supporting message, function_call, and function_call_output types.
 
 from typing import Any, Dict, List, Optional, Union
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ResponsesInputMessage(BaseModel):
@@ -124,8 +124,7 @@ class ResponsesRequest(BaseModel):
         description="Reasoning configuration for thinking models",
     )
 
-    class Config:
-        extra = "allow"
+    model_config = ConfigDict(extra="allow")
 
 
 class ResponsesOutputMessage(BaseModel):

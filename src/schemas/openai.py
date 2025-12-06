@@ -4,7 +4,7 @@ Pydantic schemas for OpenAI API format.
 
 from typing import Any, Dict, List, Optional, Union
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class FunctionDefinition(BaseModel):
@@ -164,9 +164,9 @@ class ChatCompletionRequest(BaseModel):
         description="Whether to allow parallel tool calls",
     )
 
-    class Config:
-        extra = "allow"
-        json_schema_extra = {
+    model_config = ConfigDict(
+        extra="allow",
+        json_schema_extra={
             "example": {
                 "model": "gemini-2.5-pro",
                 "messages": [
@@ -177,7 +177,8 @@ class ChatCompletionRequest(BaseModel):
                 "max_tokens": 1024,
                 "stream": False,
             }
-        }
+        },
+    )
 
 
 class ChatCompletionChoice(BaseModel):

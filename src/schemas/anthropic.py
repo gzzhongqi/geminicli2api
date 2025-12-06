@@ -4,7 +4,7 @@ Pydantic schemas for Anthropic/Claude API format.
 
 from typing import Any, Dict, List, Optional, Union
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class TextContent(BaseModel):
@@ -127,8 +127,7 @@ class ToolInputSchema(BaseModel):
         description="List of required property names",
     )
 
-    class Config:
-        extra = "allow"
+    model_config = ConfigDict(extra="allow")
 
 
 class Tool(BaseModel):
@@ -246,16 +245,17 @@ class MessagesRequest(BaseModel):
         description="Extended thinking configuration",
     )
 
-    class Config:
-        extra = "allow"
-        json_schema_extra = {
+    model_config = ConfigDict(
+        extra="allow",
+        json_schema_extra={
             "example": {
                 "model": "gemini-2.5-pro",
                 "max_tokens": 1024,
                 "messages": [{"role": "user", "content": "Hello!"}],
                 "temperature": 0.7,
             }
-        }
+        },
+    )
 
 
 class Usage(BaseModel):
