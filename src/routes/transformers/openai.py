@@ -2,6 +2,7 @@
 OpenAI Format Transformers - Handles conversion between OpenAI and Gemini API formats.
 """
 
+import json
 import re
 import time
 import uuid
@@ -93,18 +94,21 @@ def _extract_images_from_text(text: str) -> List[Dict[str, Any]]:
     return parts if parts else [{"text": text}]
 
 
-def _extract_content_and_reasoning(parts: List[Dict[str, Any]]) -> Tuple[str, str]:
+def _extract_content_and_reasoning(
+    parts: List[Dict[str, Any]],
+) -> Tuple[str, str, List[Dict[str, Any]]]:
     """
-    Extract content and reasoning from Gemini response parts.
+    Extract content, reasoning, and function calls from Gemini response parts.
 
     Args:
         parts: List of Gemini content parts
 
     Returns:
-        Tuple of (content, reasoning_content)
+        Tuple of (content, reasoning_content, tool_calls)
     """
     content_parts: List[str] = []
     reasoning_content = ""
+    tool_calls: List[Dict[str, Any]] = []
 
     for part in parts:
         # Text parts
@@ -113,6 +117,22 @@ def _extract_content_and_reasoning(parts: List[Dict[str, Any]]) -> Tuple[str, st
                 reasoning_content += part.get("text", "")
             else:
                 content_parts.append(part.get("text", ""))
+            continue
+
+        # Function call parts - Gemini format
+        if part.get("functionCall"):
+            func_call = part["functionCall"]
+            tool_call_id = f"call_{uuid.uuid4().hex[:24]}"
+            tool_calls.append(
+                {
+                    "id": tool_call_id,
+                    "type": "function",
+                    "function": {
+                        "name": func_call.get("name", ""),
+                        "arguments": json.dumps(func_call.get("args", {})),
+                    },
+                }
+            )
             continue
 
         # Inline image data -> embed as Markdown data URI
@@ -124,7 +144,7 @@ def _extract_content_and_reasoning(parts: List[Dict[str, Any]]) -> Tuple[str, st
                 content_parts.append(f"![image](data:{mime};base64,{data_b64})")
 
     content = "\n\n".join(p for p in content_parts if p)
-    return content, reasoning_content
+    return content, reasoning_content, tool_calls
 
 
 def _map_finish_reason(gemini_reason: Optional[str]) -> Optional[str]:
@@ -159,6 +179,9 @@ def _process_message_content(content: Any) -> List[Dict[str, Any]]:
     Returns:
         List of Gemini content parts
     """
+    if content is None:
+        return []
+
     if isinstance(content, str):
         return _extract_images_from_text(content)
 
@@ -186,6 +209,95 @@ def _process_message_content(content: Any) -> List[Dict[str, Any]]:
                     continue
 
     return parts
+
+
+def _transform_openai_tools_to_gemini(
+    tools: List[Any],
+) -> List[Dict[str, Any]]:
+    """
+    Transform OpenAI tools format to Gemini function declarations.
+
+    Args:
+        tools: List of OpenAI tool definitions
+
+    Returns:
+        List of Gemini function declarations
+    """
+    function_declarations = []
+
+    for tool in tools:
+        if hasattr(tool, "type"):
+            tool_type = tool.type
+            tool_function = tool.function
+        else:
+            tool_type = tool.get("type", "function")
+            tool_function = tool.get("function", {})
+
+        if tool_type != "function":
+            continue
+
+        # Extract function details
+        if hasattr(tool_function, "name"):
+            name = tool_function.name
+            description = tool_function.description
+            parameters = tool_function.parameters
+        else:
+            name = tool_function.get("name")
+            description = tool_function.get("description")
+            parameters = tool_function.get("parameters")
+
+        if not name:
+            continue
+
+        func_decl: Dict[str, Any] = {"name": name}
+
+        if description:
+            func_decl["description"] = description
+
+        if parameters:
+            # Gemini expects parameters without $schema and additionalProperties
+            params = dict(parameters)
+            params.pop("$schema", None)
+            params.pop("additionalProperties", None)
+            func_decl["parameters"] = params
+
+        function_declarations.append(func_decl)
+
+    return function_declarations
+
+
+def _transform_tool_choice_to_gemini(
+    tool_choice: Any,
+) -> Optional[Dict[str, Any]]:
+    """
+    Transform OpenAI tool_choice to Gemini function calling config.
+
+    Args:
+        tool_choice: OpenAI tool_choice value
+
+    Returns:
+        Gemini functionCallingConfig or None
+    """
+    if tool_choice is None:
+        return None
+
+    if isinstance(tool_choice, str):
+        mode_mapping = {
+            "auto": "AUTO",
+            "none": "NONE",
+            "required": "ANY",
+        }
+        mode = mode_mapping.get(tool_choice)
+        if mode:
+            return {"mode": mode}
+    elif isinstance(tool_choice, dict):
+        # Specific function choice: {"type": "function", "function": {"name": "func_name"}}
+        if tool_choice.get("type") == "function":
+            func_name = tool_choice.get("function", {}).get("name")
+            if func_name:
+                return {"mode": "ANY", "allowedFunctionNames": [func_name]}
+
+    return None
 
 
 def _build_thinking_config(
@@ -261,13 +373,98 @@ def openai_request_to_gemini(
     # Process each message
     for message in openai_request.messages:
         role = message.role
+
+        # Handle tool/function response messages
+        if role == "tool":
+            # Tool response message - convert to Gemini functionResponse format
+            tool_call_id = getattr(message, "tool_call_id", None)
+            func_name = getattr(message, "name", None) or "unknown"
+            msg_content = message.content if message.content else ""
+
+            # Parse content as JSON if possible, otherwise wrap as string
+            try:
+                if isinstance(msg_content, str):
+                    response_data = json.loads(msg_content) if msg_content else {}
+                else:
+                    response_data = {"result": str(msg_content)}
+            except (json.JSONDecodeError, TypeError):
+                response_data = {
+                    "result": msg_content
+                    if isinstance(msg_content, str)
+                    else str(msg_content)
+                }
+
+            parts = [
+                {
+                    "functionResponse": {
+                        "name": func_name,
+                        "response": response_data,
+                    }
+                }
+            ]
+            contents.append({"role": "user", "parts": parts})
+            continue
+
+        # Handle assistant messages with tool_calls
+        if role == "assistant":
+            role = "model"
+            tool_calls = getattr(message, "tool_calls", None)
+
+            if tool_calls:
+                # Assistant message with function calls
+                parts: List[Dict[str, Any]] = []
+
+                # Add text content if present
+                if message.content:
+                    text_parts = _process_message_content(message.content)
+                    parts.extend(text_parts)
+
+                # Add function calls
+                for tool_call in tool_calls:
+                    if hasattr(tool_call, "function"):
+                        func = tool_call.function
+                        func_name = (
+                            func.get("name")
+                            if isinstance(func, dict)
+                            else getattr(func, "name", "")
+                        )
+                        func_args_str = (
+                            func.get("arguments")
+                            if isinstance(func, dict)
+                            else getattr(func, "arguments", "{}")
+                        )
+                    else:
+                        func = tool_call.get("function", {})
+                        func_name = func.get("name", "")
+                        func_args_str = func.get("arguments", "{}")
+
+                    # Parse arguments JSON string to dict
+                    try:
+                        func_args = json.loads(func_args_str) if func_args_str else {}
+                    except (json.JSONDecodeError, TypeError):
+                        func_args = {}
+
+                    parts.append(
+                        {
+                            "functionCall": {
+                                "name": func_name,
+                                "args": func_args,
+                            }
+                        }
+                    )
+
+                contents.append({"role": role, "parts": parts})
+                continue
+
+        # Standard role mapping
         if role == "assistant":
             role = "model"
         elif role == "system":
             role = "user"
 
         parts = _process_message_content(message.content)
-        contents.append({"role": role, "parts": parts})
+        if parts:  # Only add if there are parts
+            contents.append({"role": role, "parts": parts})
 
     # Build generation config
     generation_config: Dict[str, Any] = {}
@@ -305,9 +502,27 @@ def openai_request_to_gemini(
         "model": get_base_model_name(openai_request.model),
     }
 
+    # Handle tools - either search or function calling
+    tools_list: List[Dict[str, Any]] = []
+
     # Add search tool if needed
     if is_search_model(openai_request.model):
-        request_payload["tools"] = [{"googleSearch": {}}]
+        tools_list.append({"googleSearch": {}})
+
+    # Add function declarations if tools are provided
+    if openai_request.tools:
+        function_declarations = _transform_openai_tools_to_gemini(openai_request.tools)
+        if function_declarations:
+            tools_list.append({"functionDeclarations": function_declarations})
+
+    if tools_list:
+        request_payload["tools"] = tools_list
+
+    # Add tool choice config if specified
+    if openai_request.tool_choice:
+        tool_config = _transform_tool_choice_to_gemini(openai_request.tool_choice)
+        if tool_config:
+            request_payload["toolConfig"] = {"functionCallingConfig": tool_config}
 
     # Add thinking config
     reasoning_effort = getattr(openai_request, "reasoning_effort", None)
@@ -339,22 +554,40 @@ def gemini_response_to_openai(
             role = "assistant"
 
         parts = candidate.get("content", {}).get("parts", [])
-        content, reasoning_content = _extract_content_and_reasoning(parts)
+        content, reasoning_content, tool_calls = _extract_content_and_reasoning(parts)
 
-        message: Dict[str, Any] = {"role": role, "content": content}
+        message: Dict[str, Any] = {"role": role}
+
+        # Add content (can be None if only tool_calls)
+        if content or not tool_calls:
+            message["content"] = content if content else None
+
         if reasoning_content:
             message["reasoning_content"] = reasoning_content
+
+        # Add tool_calls if present
+        if tool_calls:
+            message["tool_calls"] = tool_calls
+            # When there are tool_calls, content should be null per OpenAI spec
+            if not content:
+                message["content"] = None
+
+        # Determine finish reason
+        finish_reason = _map_finish_reason(candidate.get("finishReason"))
+        # If there are tool_calls and no explicit finish reason, use "tool_calls"
+        if tool_calls and finish_reason == "stop":
+            finish_reason = "tool_calls"
 
         choices.append(
             {
                 "index": candidate.get("index", 0),
                 "message": message,
-                "finish_reason": _map_finish_reason(candidate.get("finishReason")),
+                "finish_reason": finish_reason,
             }
         )
 
     return {
-        "id": str(uuid.uuid4()),
+        "id": f"chatcmpl-{uuid.uuid4().hex}",
         "object": "chat.completion",
         "created": int(time.time()),
         "model": model,
@@ -384,19 +617,28 @@ def gemini_stream_chunk_to_openai(
             role = "assistant"
 
         parts = candidate.get("content", {}).get("parts", [])
-        content, reasoning_content = _extract_content_and_reasoning(parts)
+        content, reasoning_content, tool_calls = _extract_content_and_reasoning(parts)
 
-        delta: Dict[str, str] = {}
+        delta: Dict[str, Any] = {}
         if content:
             delta["content"] = content
         if reasoning_content:
             delta["reasoning_content"] = reasoning_content
 
+        # Add tool_calls to delta if present
+        if tool_calls:
+            delta["tool_calls"] = tool_calls
+
+        # Determine finish reason
+        finish_reason = _map_finish_reason(candidate.get("finishReason"))
+        if tool_calls and finish_reason == "stop":
+            finish_reason = "tool_calls"
+
         choices.append(
             {
                 "index": candidate.get("index", 0),
                 "delta": delta,
-                "finish_reason": _map_finish_reason(candidate.get("finishReason")),
+                "finish_reason": finish_reason,
             }
         )
 
