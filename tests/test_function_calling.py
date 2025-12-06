@@ -10,6 +10,11 @@ from src.routes.transformers.openai import (
     _transform_tool_choice_to_gemini,
     _extract_content_and_reasoning,
 )
+from src.routes.transformers.responses import (
+    responses_request_to_gemini,
+    gemini_response_to_responses,
+    gemini_stream_chunk_to_responses_events,
+)
 from src.schemas.openai import (
     ChatCompletionRequest,
     ChatMessage,
@@ -17,6 +22,7 @@ from src.schemas.openai import (
     FunctionDefinition,
     ToolCall,
 )
+from src.schemas.responses import ResponsesRequest
 
 
 class TestTransformOpenAIToolsToGemini:
@@ -401,3 +407,235 @@ class TestGeminiStreamChunkToOpenAI:
         )
         assert result["choices"][0]["delta"]["content"] == "Hello"
         assert "tool_calls" not in result["choices"][0]["delta"]
+
+
+class TestResponsesAPITransformers:
+    """Tests for Responses API transformers."""
+
+    def test_simple_string_input(self):
+        """Test transforming simple string input."""
+        request = ResponsesRequest(
+            model="gemini-2.5-flash",
+            input="Hello, world!",
+        )
+        result = responses_request_to_gemini(request)
+        assert len(result["contents"]) == 1
+        assert result["contents"][0]["role"] == "user"
+        assert result["contents"][0]["parts"][0]["text"] == "Hello, world!"
+
+    def test_input_with_messages(self):
+        """Test transforming array input with messages."""
+        request = ResponsesRequest(
+            model="gemini-2.5-flash",
+            input=[
+                {"role": "user", "content": "What is 2+2?"},
+                {"role": "assistant", "content": "2+2 equals 4."},
+                {"role": "user", "content": "And 3+3?"},
+            ],
+        )
+        result = responses_request_to_gemini(request)
+        assert len(result["contents"]) == 3
+        assert result["contents"][0]["role"] == "user"
+        assert result["contents"][1]["role"] == "model"
+        assert result["contents"][2]["role"] == "user"
+
+    def test_instructions_as_system(self):
+        """Test that instructions become systemInstruction."""
+        request = ResponsesRequest(
+            model="gemini-2.5-flash",
+            input="Hi",
+            instructions="You are a helpful assistant.",
+        )
+        result = responses_request_to_gemini(request)
+        assert "systemInstruction" in result
+        assert (
+            result["systemInstruction"]["parts"][0]["text"]
+            == "You are a helpful assistant."
+        )
+
+    def test_tools_transformation(self):
+        """Test transforming tools to Gemini format."""
+        request = ResponsesRequest(
+            model="gemini-2.5-flash",
+            input="What's the weather?",
+            tools=[
+                {
+                    "type": "function",
+                    "name": "get_weather",
+                    "description": "Get weather for a location",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"location": {"type": "string"}},
+                        "required": ["location"],
+                    },
+                }
+            ],
+        )
+        result = responses_request_to_gemini(request)
+        assert "tools" in result
+        func_decls = None
+        for tool in result["tools"]:
+            if "functionDeclarations" in tool:
+                func_decls = tool["functionDeclarations"]
+                break
+        assert func_decls is not None
+        assert func_decls[0]["name"] == "get_weather"
+
+    def test_web_search_tool(self):
+        """Test web_search tool becomes googleSearch."""
+        request = ResponsesRequest(
+            model="gemini-2.5-flash",
+            input="Search for latest news",
+            tools=[{"type": "web_search"}],
+        )
+        result = responses_request_to_gemini(request)
+        assert "tools" in result
+        assert any("googleSearch" in t for t in result["tools"])
+
+    def test_function_call_output(self):
+        """Test transforming function_call_output input."""
+        request = ResponsesRequest(
+            model="gemini-2.5-flash",
+            input=[
+                {"role": "user", "content": "What's the weather in Tokyo?"},
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_123",
+                    "name": "get_weather",
+                    "output": '{"temperature": 22, "condition": "sunny"}',
+                },
+            ],
+        )
+        result = responses_request_to_gemini(request)
+        # Function output should be converted to functionResponse
+        assert len(result["contents"]) == 2
+        assert "functionResponse" in result["contents"][1]["parts"][0]
+
+    def test_gemini_response_to_responses_text(self):
+        """Test transforming Gemini text response to Responses format."""
+        gemini_response = {
+            "candidates": [
+                {
+                    "content": {
+                        "role": "model",
+                        "parts": [{"text": "Hello! How can I help you?"}],
+                    },
+                    "finishReason": "STOP",
+                }
+            ],
+            "usageMetadata": {
+                "promptTokenCount": 10,
+                "candidatesTokenCount": 8,
+                "totalTokenCount": 18,
+            },
+        }
+        result = gemini_response_to_responses(gemini_response, "gemini-2.5-flash")
+
+        assert result["object"] == "response"
+        assert result["status"] == "completed"
+        assert result["output_text"] == "Hello! How can I help you?"
+        assert len(result["output"]) == 1
+        assert result["output"][0]["type"] == "message"
+        assert result["output"][0]["role"] == "assistant"
+        assert result["usage"]["input_tokens"] == 10
+        assert result["usage"]["output_tokens"] == 8
+
+    def test_gemini_response_to_responses_function_call(self):
+        """Test transforming Gemini function call to Responses format."""
+        gemini_response = {
+            "candidates": [
+                {
+                    "content": {
+                        "role": "model",
+                        "parts": [
+                            {
+                                "functionCall": {
+                                    "name": "get_weather",
+                                    "args": {"location": "Tokyo"},
+                                }
+                            }
+                        ],
+                    },
+                    "finishReason": "STOP",
+                }
+            ],
+        }
+        result = gemini_response_to_responses(gemini_response, "gemini-2.5-flash")
+
+        assert len(result["output"]) == 1
+        assert result["output"][0]["type"] == "function_call"
+        assert result["output"][0]["name"] == "get_weather"
+        assert json.loads(result["output"][0]["arguments"]) == {"location": "Tokyo"}
+        assert result["output"][0]["call_id"].startswith("call_")
+
+    def test_gemini_response_with_reasoning(self):
+        """Test transforming Gemini response with reasoning/thought."""
+        gemini_response = {
+            "candidates": [
+                {
+                    "content": {
+                        "role": "model",
+                        "parts": [
+                            {"text": "Let me think about this...", "thought": True},
+                            {"text": "The answer is 42."},
+                        ],
+                    },
+                    "finishReason": "STOP",
+                }
+            ],
+        }
+        result = gemini_response_to_responses(gemini_response, "gemini-2.5-flash")
+
+        # Should have reasoning item and message item
+        types = [item["type"] for item in result["output"]]
+        assert "reasoning" in types
+        assert "message" in types
+        assert result["output_text"] == "The answer is 42."
+
+    def test_stream_events_text(self):
+        """Test streaming events for text content."""
+        gemini_chunk = {
+            "candidates": [
+                {
+                    "content": {
+                        "role": "model",
+                        "parts": [{"text": "Hello"}],
+                    },
+                }
+            ]
+        }
+        events = gemini_stream_chunk_to_responses_events(
+            gemini_chunk, "gemini-2.5-flash", "resp_123", 0
+        )
+        assert len(events) >= 1
+        text_events = [e for e in events if e["type"] == "response.output_text.delta"]
+        assert len(text_events) == 1
+        assert text_events[0]["delta"] == "Hello"
+
+    def test_stream_events_function_call(self):
+        """Test streaming events for function call."""
+        gemini_chunk = {
+            "candidates": [
+                {
+                    "content": {
+                        "role": "model",
+                        "parts": [
+                            {
+                                "functionCall": {
+                                    "name": "get_weather",
+                                    "args": {"location": "Paris"},
+                                }
+                            }
+                        ],
+                    },
+                }
+            ]
+        }
+        events = gemini_stream_chunk_to_responses_events(
+            gemini_chunk, "gemini-2.5-flash", "resp_123", 0
+        )
+
+        # Should have item.added and arguments.done events
+        event_types = [e["type"] for e in events]
+        assert "response.output_item.added" in event_types
+        assert "response.function_call_arguments.done" in event_types
