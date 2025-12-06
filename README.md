@@ -6,10 +6,13 @@ Access Google Gemini models using [Gemini CLI](https://github.com/google-gemini/
 
 - **Free Access** - Uses Gemini CLI OAuth, no paid API key needed
 - **OpenAI-Compatible API** - Drop-in replacement for OpenAI chat completions
+- **OpenAI Responses API** - Support for the newer `/v1/responses` endpoint
+- **Anthropic-Compatible API** - Claude-style messages API
 - **Native Gemini API** - Direct proxy to Google's Gemini API
-- **Streaming Support** - Real-time streaming for both API formats
+- **Function Calling** - Full tool/function calling support across all API formats
+- **Streaming Support** - Real-time streaming for all API formats
 - **Multimodal** - Text and image inputs
-- **Google Search Grounding** - Enable with `-search` model suffix
+- **Google Search Grounding** - Enable with `-search` model suffix or `web_search` tool
 - **Thinking Control** - `-nothinking` and `-maxthinking` model variants
 - **Multiple Credentials** - Round-robin load balancing with automatic fallback
 
@@ -119,6 +122,7 @@ GEMINI_CREDENTIAL_FILES=creds1.json,creds2.json,creds3.json
 
 ### OpenAI-Compatible
 - `POST /v1/chat/completions` - Chat completions
+- `POST /v1/responses` - Responses API
 - `GET /v1/models` - List models
 
 ### Anthropic-Compatible
@@ -148,6 +152,8 @@ API authentication supports:
 
 ## Usage Example
 
+### OpenAI Chat Completions
+
 ```python
 import openai
 
@@ -160,6 +166,113 @@ response = client.chat.completions.create(
     model="gemini-2.5-flash",
     messages=[{"role": "user", "content": "Hello!"}]
 )
+```
+
+### Function Calling
+
+```python
+import openai
+
+client = openai.OpenAI(
+    base_url="http://localhost:8888/v1",
+    api_key="your_password"
+)
+
+tools = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "description": "Get weather for a location",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "location": {"type": "string"}
+                },
+                "required": ["location"]
+            }
+        }
+    }
+]
+
+response = client.chat.completions.create(
+    model="gemini-2.5-flash",
+    messages=[{"role": "user", "content": "What's the weather in Tokyo?"}],
+    tools=tools
+)
+
+# Handle tool calls
+if response.choices[0].message.tool_calls:
+    tool_call = response.choices[0].message.tool_calls[0]
+    print(f"Function: {tool_call.function.name}")
+    print(f"Arguments: {tool_call.function.arguments}")
+```
+
+### Responses API
+
+```python
+import httpx
+
+response = httpx.post(
+    "http://localhost:8888/v1/responses",
+    headers={"Authorization": "Bearer your_password"},
+    json={
+        "model": "gemini-2.5-flash",
+        "input": "What is 2+2?",
+    }
+)
+print(response.json()["output_text"])
+```
+
+### Responses API with Function Calling
+
+```python
+import httpx
+
+response = httpx.post(
+    "http://localhost:8888/v1/responses",
+    headers={"Authorization": "Bearer your_password"},
+    json={
+        "model": "gemini-2.5-flash",
+        "input": "What's the weather in Paris?",
+        "tools": [
+            {
+                "type": "function",
+                "name": "get_weather",
+                "description": "Get weather for a location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"location": {"type": "string"}},
+                    "required": ["location"]
+                }
+            }
+        ]
+    }
+)
+
+# Check for function calls in output
+for item in response.json()["output"]:
+    if item["type"] == "function_call":
+        print(f"Call ID: {item['call_id']}")
+        print(f"Function: {item['name']}")
+        print(f"Arguments: {item['arguments']}")
+```
+
+### Responses API with Web Search
+
+```python
+import httpx
+
+response = httpx.post(
+    "http://localhost:8888/v1/responses",
+    headers={"Authorization": "Bearer your_password"},
+    json={
+        "model": "gemini-2.5-flash",
+        "input": "What are the latest news about AI?",
+        "tools": [{"type": "web_search"}]
+    }
+)
+print(response.json()["output_text"])
 ```
 
 ## Models
