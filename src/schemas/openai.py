@@ -7,22 +7,70 @@ from typing import Any, Dict, List, Optional, Union
 from pydantic import BaseModel, Field
 
 
+class FunctionDefinition(BaseModel):
+    """Function definition for tool calling."""
+
+    name: str = Field(..., description="The name of the function to be called")
+    description: Optional[str] = Field(
+        default=None, description="A description of what the function does"
+    )
+    parameters: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="The parameters the function accepts, described as a JSON Schema object",
+    )
+
+
+class Tool(BaseModel):
+    """Tool definition for function calling."""
+
+    type: str = Field(
+        default="function",
+        description="The type of the tool. Currently only 'function' is supported",
+    )
+    function: FunctionDefinition = Field(..., description="The function definition")
+
+
+class ToolCall(BaseModel):
+    """A tool call made by the assistant."""
+
+    id: str = Field(..., description="The ID of the tool call")
+    type: str = Field(
+        default="function", description="The type of the tool call (always 'function')"
+    )
+    function: Dict[str, Any] = Field(
+        ...,
+        description="The function that was called, containing 'name' and 'arguments'",
+    )
+
+
 class ChatMessage(BaseModel):
     """Chat message in a conversation."""
 
     role: str = Field(
         ...,
         description="The role of the message author",
-        examples=["user", "assistant", "system"],
+        examples=["user", "assistant", "system", "tool"],
     )
-    content: Union[str, List[Dict[str, Any]]] = Field(
-        ...,
+    content: Optional[Union[str, List[Dict[str, Any]]]] = Field(
+        default=None,
         description="The content of the message. Can be a string or array of content parts for multi-modal input.",
         examples=["Hello, how can I help you today?"],
     )
     reasoning_content: Optional[str] = Field(
         default=None,
         description="Extended thinking/reasoning content (for thinking models)",
+    )
+    tool_calls: Optional[List[ToolCall]] = Field(
+        default=None,
+        description="Tool calls made by the assistant",
+    )
+    tool_call_id: Optional[str] = Field(
+        default=None,
+        description="The ID of the tool call this message is responding to (for role='tool')",
+    )
+    name: Optional[str] = Field(
+        default=None,
+        description="The name of the function (for role='tool' or legacy function role)",
     )
 
 
@@ -102,6 +150,18 @@ class ChatCompletionRequest(BaseModel):
         default=None,
         description="Reasoning effort level for thinking models",
         examples=["low", "medium", "high"],
+    )
+    tools: Optional[List[Tool]] = Field(
+        default=None,
+        description="A list of tools the model may call",
+    )
+    tool_choice: Optional[Union[str, Dict[str, Any]]] = Field(
+        default=None,
+        description="Controls which tool is called. 'auto', 'none', 'required', or specific function",
+    )
+    parallel_tool_calls: Optional[bool] = Field(
+        default=True,
+        description="Whether to allow parallel tool calls",
     )
 
     class Config:
