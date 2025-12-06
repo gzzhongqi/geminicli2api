@@ -639,3 +639,129 @@ class TestResponsesAPITransformers:
         event_types = [e["type"] for e in events]
         assert "response.output_item.added" in event_types
         assert "response.function_call_arguments.done" in event_types
+
+    def test_stream_events_with_finish_reason(self):
+        """Test streaming events when finish reason is present."""
+        gemini_chunk = {
+            "candidates": [
+                {
+                    "content": {
+                        "role": "model",
+                        "parts": [{"text": "Final message"}],
+                    },
+                    "finishReason": "STOP",
+                }
+            ]
+        }
+        events = gemini_stream_chunk_to_responses_events(
+            gemini_chunk, "gemini-2.5-flash", "resp_123", 0
+        )
+        event_types = [e["type"] for e in events]
+        # Should have text delta event
+        assert "response.output_text.delta" in event_types
+
+    def test_stream_events_with_reasoning(self):
+        """Test streaming events for reasoning/thought content."""
+        gemini_chunk = {
+            "candidates": [
+                {
+                    "content": {
+                        "role": "model",
+                        "parts": [{"text": "Thinking about this...", "thought": True}],
+                    },
+                }
+            ]
+        }
+        events = gemini_stream_chunk_to_responses_events(
+            gemini_chunk, "gemini-2.5-flash", "resp_123", 0
+        )
+        # Reasoning chunks should generate events
+        assert len(events) >= 1
+
+    def test_stream_events_empty_parts(self):
+        """Test streaming events handle empty parts gracefully."""
+        gemini_chunk = {
+            "candidates": [
+                {
+                    "content": {
+                        "role": "model",
+                        "parts": [],
+                    },
+                }
+            ]
+        }
+        events = gemini_stream_chunk_to_responses_events(
+            gemini_chunk, "gemini-2.5-flash", "resp_123", 0
+        )
+        # Should not crash, may return empty or minimal events
+        assert isinstance(events, list)
+
+    def test_stream_events_multiple_text_parts(self):
+        """Test streaming events with multiple text parts in one chunk."""
+        gemini_chunk = {
+            "candidates": [
+                {
+                    "content": {
+                        "role": "model",
+                        "parts": [
+                            {"text": "First part. "},
+                            {"text": "Second part."},
+                        ],
+                    },
+                }
+            ]
+        }
+        events = gemini_stream_chunk_to_responses_events(
+            gemini_chunk, "gemini-2.5-flash", "resp_123", 0
+        )
+        text_deltas = [e for e in events if e["type"] == "response.output_text.delta"]
+        # Should have text delta events
+        assert len(text_deltas) >= 1
+
+    def test_stream_events_response_id_included(self):
+        """Test streaming events include response_id."""
+        gemini_chunk = {
+            "candidates": [
+                {
+                    "content": {
+                        "role": "model",
+                        "parts": [{"text": "Test"}],
+                    },
+                }
+            ]
+        }
+        events = gemini_stream_chunk_to_responses_events(
+            gemini_chunk, "gemini-2.5-flash", "resp_abc123", 0
+        )
+        for event in events:
+            if "response_id" in event:
+                assert event["response_id"] == "resp_abc123"
+
+    def test_stream_events_output_index_tracking(self):
+        """Test streaming events track output_index correctly."""
+        gemini_chunk = {
+            "candidates": [
+                {
+                    "content": {
+                        "role": "model",
+                        "parts": [{"text": "Content"}],
+                    },
+                }
+            ]
+        }
+        # First call with output_index=0
+        events_0 = gemini_stream_chunk_to_responses_events(
+            gemini_chunk, "gemini-2.5-flash", "resp_123", 0
+        )
+        # Second call with output_index=1
+        events_1 = gemini_stream_chunk_to_responses_events(
+            gemini_chunk, "gemini-2.5-flash", "resp_123", 1
+        )
+
+        # Check output_index is tracked in events
+        for event in events_0:
+            if "output_index" in event:
+                assert event["output_index"] == 0
+        for event in events_1:
+            if "output_index" in event:
+                assert event["output_index"] == 1
