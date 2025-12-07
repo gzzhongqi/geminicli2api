@@ -46,8 +46,9 @@ class TestTransformOpenAIToolsToGemini:
                 },
             }
         ]
-        result = _transform_openai_tools_to_gemini(tools)
+        result, has_web_search = _transform_openai_tools_to_gemini(tools)
         assert len(result) == 1
+        assert has_web_search is False
         assert result[0]["name"] == "get_weather"
         assert result[0]["description"] == "Get weather for a location"
         assert result[0]["parameters"]["type"] == "object"
@@ -69,7 +70,7 @@ class TestTransformOpenAIToolsToGemini:
                 },
             }
         ]
-        result = _transform_openai_tools_to_gemini(tools)
+        result, _ = _transform_openai_tools_to_gemini(tools)
         assert "$schema" not in result[0]["parameters"]
         assert "additionalProperties" not in result[0]["parameters"]
         assert result[0]["parameters"]["type"] == "object"
@@ -80,7 +81,7 @@ class TestTransformOpenAIToolsToGemini:
             {"type": "code_interpreter"},
             {"type": "function", "function": {"name": "valid_func"}},
         ]
-        result = _transform_openai_tools_to_gemini(tools)
+        result, _ = _transform_openai_tools_to_gemini(tools)
         assert len(result) == 1
         assert result[0]["name"] == "valid_func"
 
@@ -99,9 +100,27 @@ class TestTransformOpenAIToolsToGemini:
                 ),
             )
         ]
-        result = _transform_openai_tools_to_gemini(tools)
+        result, _ = _transform_openai_tools_to_gemini(tools)
         assert len(result) == 1
         assert result[0]["name"] == "search"
+
+    def test_web_search_tool_detection(self):
+        """Test that web_search tool is detected."""
+        tools = [
+            {"type": "web_search"},
+            {"type": "function", "function": {"name": "my_func"}},
+        ]
+        result, has_web_search = _transform_openai_tools_to_gemini(tools)
+        assert has_web_search is True
+        assert len(result) == 1
+        assert result[0]["name"] == "my_func"
+
+    def test_web_search_preview_tool_detection(self):
+        """Test that web_search_preview tool is detected."""
+        tools = [{"type": "web_search_preview"}]
+        result, has_web_search = _transform_openai_tools_to_gemini(tools)
+        assert has_web_search is True
+        assert len(result) == 0
 
 
 class TestTransformToolChoiceToGemini:
