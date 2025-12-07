@@ -12,8 +12,8 @@ Access Google Gemini models using [Gemini CLI](https://github.com/google-gemini/
 - **Function Calling** - Full tool/function calling support across all API formats
 - **Streaming Support** - Real-time streaming for all API formats
 - **Multimodal** - Text and image inputs
-- **Google Search Grounding** - Enable with `-search` model suffix or `web_search` tool
-- **Thinking Control** - `-nothinking` and `-maxthinking` model variants
+- **Google Search Grounding** - Enable with `web_search` tool
+- **Thinking Control** - Control reasoning via `reasoning_effort` parameter
 - **Multiple Credentials** - Round-robin load balancing with automatic fallback
 
 ## Quick Start
@@ -277,12 +277,62 @@ print(response.json()["output_text"])
 
 ## Models
 
-Base models: `gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-1.5-pro`, `gemini-1.5-flash`
+Supported models: `gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-2.5-flash-lite`, `gemini-2.0-flash`, `gemini-1.5-pro`, `gemini-1.5-flash`
 
-Variants (2.5 models):
-- `-search` - Google Search grounding
-- `-nothinking` - Minimal reasoning
-- `-maxthinking` - Maximum reasoning budget
+## Parameters
+
+### Reasoning/Thinking Control
+
+Control thinking budget via `reasoning_effort` parameter (OpenAI) or `thinking` config (Anthropic):
+
+```python
+# OpenAI format
+response = client.chat.completions.create(
+    model="gemini-2.5-flash",
+    messages=[{"role": "user", "content": "Solve this math problem"}],
+    reasoning_effort="high"  # none, off, minimal, low, medium, high, max
+)
+
+# Anthropic format
+response = client.messages.create(
+    model="gemini-2.5-flash",
+    max_tokens=1024,
+    thinking={"type": "enabled", "budget_tokens": 10000},
+    messages=[{"role": "user", "content": "Solve this math problem"}]
+)
+```
+
+| Value | Description | Flash Budget | Pro Budget |
+|-------|-------------|--------------|------------|
+| `none`/`off`/`disabled` | Disable thinking | 0 | 128 |
+| `minimal` | Minimal thinking | 0 | 128 |
+| `low` | Low thinking | 1000 | 1000 |
+| `medium` | Auto (default) | -1 | -1 |
+| `high` | High thinking | 24576 | 32768 |
+| `max` | Maximum thinking | 24576 | 32768 |
+
+### Web Search / Grounding
+
+Enable Google Search grounding via `web_search` tool:
+
+```python
+# OpenAI format
+response = client.chat.completions.create(
+    model="gemini-2.5-flash",
+    messages=[{"role": "user", "content": "What are the latest AI news?"}],
+    tools=[{"type": "web_search"}]
+)
+
+# Responses API format
+response = httpx.post(
+    "http://localhost:8888/v1/responses",
+    json={
+        "model": "gemini-2.5-flash",
+        "input": "What are the latest AI news?",
+        "tools": [{"type": "web_search"}]
+    }
+)
+```
 
 ## Development
 
