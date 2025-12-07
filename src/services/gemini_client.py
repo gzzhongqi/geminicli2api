@@ -33,8 +33,6 @@ from .auth import (
 from ..utils import get_user_agent
 from ..models import (
     get_base_model_name,
-    is_search_model,
-    get_thinking_budget,
     should_include_thoughts,
 )
 from ..config import (
@@ -474,21 +472,14 @@ def build_gemini_payload_from_native(
 
     # Configure thinking for non-image models
     if "gemini-2.5-flash-image" not in model_from_path:
-        thinking_budget = get_thinking_budget(model_from_path)
         include_thoughts = should_include_thoughts(model_from_path)
 
         thinking_config = native_request["generationConfig"]["thinkingConfig"]
         thinking_config["includeThoughts"] = include_thoughts
 
+        # Use auto thinking budget if not specified
         if "thinkingBudget" not in thinking_config:
-            thinking_config["thinkingBudget"] = thinking_budget
-
-    # Add Google Search for search models
-    if is_search_model(model_from_path):
-        if "tools" not in native_request:
-            native_request["tools"] = []
-        if not any(tool.get("googleSearch") for tool in native_request["tools"]):
-            native_request["tools"].append({"googleSearch": {}})
+            thinking_config["thinkingBudget"] = -1
 
     return {
         "model": get_base_model_name(model_from_path),
