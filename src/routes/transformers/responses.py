@@ -9,12 +9,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from ...schemas.responses import ResponsesRequest
 from ...models import (
-    is_search_model,
     get_base_model_name,
-    get_thinking_budget,
     should_include_thoughts,
-    is_nothinking_model,
-    is_maxthinking_model,
 )
 from ...config import DEFAULT_SAFETY_SETTINGS
 
@@ -123,23 +119,39 @@ def _build_thinking_config(
     if "gemini-2.5-flash-image" in model:
         return None
 
+    base_model = get_base_model_name(model)
     thinking_budget: Optional[int] = None
 
-    # Explicit thinking variants
-    if is_nothinking_model(model) or is_maxthinking_model(model):
-        thinking_budget = get_thinking_budget(model)
-    elif reasoning:
+    # Model-specific max budgets
+    max_budgets = {
+        "gemini-2.5-flash": 24576,
+        "gemini-2.5-pro": 32768,
+        "gemini-3-pro": 45000,
+    }
+    # Model-specific minimal budgets (off for flash, minimal for pro)
+    minimal_budgets = {
+        "gemini-2.5-flash": 0,
+        "gemini-2.5-pro": 128,
+        "gemini-3-pro": 128,
+    }
+
+    if reasoning:
         # Map Responses API reasoning effort to budget
         effort = reasoning.get("effort", "medium")
-        base_model = get_base_model_name(model)
         effort_budgets = {
+            # Disable thinking
+            "none": minimal_budgets,
+            "off": minimal_budgets,
+            "disabled": minimal_budgets,
+            # Minimal thinking
+            "minimal": minimal_budgets,
+            # Low thinking budget
             "low": {"default": 1000},
+            # Auto/default thinking
             "medium": {"default": -1},
-            "high": {
-                "gemini-2.5-flash": 24576,
-                "gemini-2.5-pro": 32768,
-                "gemini-3-pro": 45000,
-            },
+            # Maximum thinking
+            "high": max_budgets,
+            "max": max_budgets,
         }
         if effort in effort_budgets:
             budgets = effort_budgets[effort]
@@ -148,7 +160,8 @@ def _build_thinking_config(
                     thinking_budget = value
                     break
     else:
-        thinking_budget = get_thinking_budget(model)
+        # Default: auto thinking
+        thinking_budget = -1
 
     if thinking_budget is not None:
         return {
@@ -302,11 +315,6 @@ def responses_request_to_gemini(
     # Handle tools
     tools_list: List[Dict[str, Any]] = []
     has_web_search = False
-
-    # Check for search model variant
-    if is_search_model(request.model):
-        tools_list.append({"googleSearch": {}})
-        has_web_search = True
 
     # Add function declarations from tools
     if request.tools:

@@ -5,17 +5,13 @@ This module contains all the logic for transforming requests and responses betwe
 
 import json
 import uuid
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Tuple
 
 from ...schemas import AnthropicMessagesRequest
 from ...config import DEFAULT_SAFETY_SETTINGS
 from ...models import (
-    is_search_model,
     get_base_model_name,
-    get_thinking_budget,
     should_include_thoughts,
-    is_nothinking_model,
-    is_maxthinking_model,
 )
 
 
@@ -172,14 +168,28 @@ def anthropic_request_to_gemini(
     if system_instruction:
         request_payload["systemInstruction"] = system_instruction
 
-    # Add Google Search grounding for search models
-    if is_search_model(anthropic_request.model):
-        request_payload["tools"] = [{"googleSearch": {}}]
+    # Handle tools - check for web_search and function tools
+    tools_list: List[Dict[str, Any]] = []
+    has_web_search = False
 
-    # Handle tools (function declarations)
+    # Handle tools (function declarations and web_search)
     if anthropic_request.tools:
-        tools_config = []
         for tool in anthropic_request.tools:
+            # Check for web_search tool (custom extension)
+            if hasattr(tool, "type") and tool.type in (
+                "web_search",
+                "web_search_preview",
+            ):
+                has_web_search = True
+                continue
+            elif hasattr(tool, "name") and tool.name in (
+                "web_search",
+                "web_search_preview",
+            ):
+                has_web_search = True
+                continue
+
+            # Regular function tool
             tool_def = {
                 "name": tool.name,
                 "description": tool.description or "",
@@ -189,12 +199,14 @@ def anthropic_request_to_gemini(
                     "required": tool.input_schema.required or [],
                 },
             }
-            tools_config.append({"functionDeclarations": [tool_def]})
+            tools_list.append({"functionDeclarations": [tool_def]})
 
-        if "tools" in request_payload:
-            request_payload["tools"].extend(tools_config)
-        else:
-            request_payload["tools"] = tools_config
+    # Add googleSearch tool if web_search was requested
+    if has_web_search:
+        tools_list.insert(0, {"googleSearch": {}})
+
+    if tools_list:
+        request_payload["tools"] = tools_list
 
     # Add thinking configuration
     if "gemini-2.5-flash-image" not in anthropic_request.model:
@@ -215,13 +227,8 @@ def anthropic_request_to_gemini(
                 elif "gemini-2.5-pro" in base_model or "gemini-3-pro" in base_model:
                     thinking_budget = 128
         else:
-            # Check model variant for thinking settings
-            if is_nothinking_model(anthropic_request.model) or is_maxthinking_model(
-                anthropic_request.model
-            ):
-                thinking_budget = get_thinking_budget(anthropic_request.model)
-            else:
-                thinking_budget = get_thinking_budget(anthropic_request.model)
+            # Default: auto thinking
+            thinking_budget = -1
 
         if thinking_budget is not None:
             request_payload["generationConfig"]["thinkingConfig"] = {

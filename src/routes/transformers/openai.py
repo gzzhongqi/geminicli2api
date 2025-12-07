@@ -10,12 +10,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from ...schemas import ChatCompletionRequest
 from ...models import (
-    is_search_model,
     get_base_model_name,
-    get_thinking_budget,
     should_include_thoughts,
-    is_nothinking_model,
-    is_maxthinking_model,
 )
 from ...config import DEFAULT_SAFETY_SETTINGS
 
@@ -213,7 +209,7 @@ def _process_message_content(content: Any) -> List[Dict[str, Any]]:
 
 def _transform_openai_tools_to_gemini(
     tools: List[Any],
-) -> List[Dict[str, Any]]:
+) -> Tuple[List[Dict[str, Any]], bool]:
     """
     Transform OpenAI tools format to Gemini function declarations.
 
@@ -221,19 +217,28 @@ def _transform_openai_tools_to_gemini(
         tools: List of OpenAI tool definitions
 
     Returns:
-        List of Gemini function declarations
+        Tuple of (function_declarations list, has_web_search bool)
     """
     function_declarations = []
+    has_web_search = False
 
     for tool in tools:
         if hasattr(tool, "type"):
             tool_type = tool.type
-            tool_function = tool.function
+            tool_function = getattr(tool, "function", None)
         else:
             tool_type = tool.get("type", "function")
             tool_function = tool.get("function", {})
 
+        # Check for web_search tool
+        if tool_type in ("web_search", "web_search_preview"):
+            has_web_search = True
+            continue
+
         if tool_type != "function":
+            continue
+
+        if not tool_function:
             continue
 
         # Extract function details
@@ -263,7 +268,7 @@ def _transform_openai_tools_to_gemini(
 
         function_declarations.append(func_decl)
 
-    return function_declarations
+    return function_declarations, has_web_search
 
 
 def _transform_tool_choice_to_gemini(
@@ -308,7 +313,7 @@ def _build_thinking_config(
 
     Args:
         model: Model name
-        reasoning_effort: Optional reasoning effort level
+        reasoning_effort: Optional reasoning effort level (none/off, minimal, low, medium, high, max)
 
     Returns:
         Thinking config dict or None
@@ -316,26 +321,38 @@ def _build_thinking_config(
     if "gemini-2.5-flash-image" in model:
         return None
 
+    base_model = get_base_model_name(model)
+
+    # Model-specific max budgets
+    max_budgets = {
+        "gemini-2.5-flash": 24576,
+        "gemini-2.5-pro": 32768,
+        "gemini-3-pro": 45000,
+    }
+    # Model-specific minimal budgets (off for flash, minimal for pro)
+    minimal_budgets = {
+        "gemini-2.5-flash": 0,
+        "gemini-2.5-pro": 128,
+        "gemini-3-pro": 128,
+    }
+
     thinking_budget: Optional[int] = None
 
-    # Explicit thinking variants ignore reasoning_effort
-    if is_nothinking_model(model) or is_maxthinking_model(model):
-        thinking_budget = get_thinking_budget(model)
-    elif reasoning_effort:
-        base_model = get_base_model_name(model)
+    if reasoning_effort:
         effort_budgets = {
-            "minimal": {
-                "gemini-2.5-flash": 0,
-                "gemini-2.5-pro": 128,
-                "gemini-3-pro": 128,
-            },
+            # Disable thinking completely
+            "none": minimal_budgets,
+            "off": minimal_budgets,
+            "disabled": minimal_budgets,
+            # Minimal thinking
+            "minimal": minimal_budgets,
+            # Low thinking budget
             "low": {"default": 1000},
+            # Auto/default thinking
             "medium": {"default": -1},
-            "high": {
-                "gemini-2.5-flash": 24576,
-                "gemini-2.5-pro": 32768,
-                "gemini-3-pro": 45000,
-            },
+            # Maximum thinking
+            "high": max_budgets,
+            "max": max_budgets,
         }
 
         if reasoning_effort in effort_budgets:
@@ -345,7 +362,8 @@ def _build_thinking_config(
                     thinking_budget = value
                     break
     else:
-        thinking_budget = get_thinking_budget(model)
+        # Default: auto thinking
+        thinking_budget = -1
 
     if thinking_budget is not None:
         return {
@@ -504,16 +522,21 @@ def openai_request_to_gemini(
 
     # Handle tools - either search or function calling
     tools_list: List[Dict[str, Any]] = []
-
-    # Add search tool if needed
-    if is_search_model(openai_request.model):
-        tools_list.append({"googleSearch": {}})
+    has_web_search = False
 
     # Add function declarations if tools are provided
     if openai_request.tools:
-        function_declarations = _transform_openai_tools_to_gemini(openai_request.tools)
+        function_declarations, web_search_in_tools = _transform_openai_tools_to_gemini(
+            openai_request.tools
+        )
+        if web_search_in_tools:
+            has_web_search = True
         if function_declarations:
             tools_list.append({"functionDeclarations": function_declarations})
+
+    # Add googleSearch tool if web_search was requested
+    if has_web_search:
+        tools_list.insert(0, {"googleSearch": {}})
 
     if tools_list:
         request_payload["tools"] = tools_list
