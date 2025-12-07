@@ -1,11 +1,11 @@
 """
-Gemini model definitions and variant generators.
+Gemini model definitions.
 """
 
 from typing import Any, Dict, List
 
-# Base Models (without search variants)
-BASE_MODELS: List[Dict[str, Any]] = [
+# Supported Models
+SUPPORTED_MODELS: List[Dict[str, Any]] = [
     {
         "name": "models/gemini-2.5-pro-preview-03-25",
         "version": "001",
@@ -123,60 +123,98 @@ BASE_MODELS: List[Dict[str, Any]] = [
         "topP": 0.95,
         "topK": 64,
     },
+    # Gemini 2.5 Lite models
+    {
+        "name": "models/gemini-2.5-flash-lite-preview-06-17",
+        "version": "001",
+        "displayName": "Gemini 2.5 Flash Lite Preview 06-17",
+        "description": "Preview version of Gemini 2.5 Flash Lite from June 17th",
+        "inputTokenLimit": 1048576,
+        "outputTokenLimit": 65535,
+        "supportedGenerationMethods": ["generateContent", "streamGenerateContent"],
+        "temperature": 1.0,
+        "maxTemperature": 2.0,
+        "topP": 0.95,
+        "topK": 64,
+    },
+    {
+        "name": "models/gemini-2.5-flash-lite",
+        "version": "001",
+        "displayName": "Gemini 2.5 Flash Lite",
+        "description": "Lightweight version of Gemini 2.5 Flash",
+        "inputTokenLimit": 1048576,
+        "outputTokenLimit": 65535,
+        "supportedGenerationMethods": ["generateContent", "streamGenerateContent"],
+        "temperature": 1.0,
+        "maxTemperature": 2.0,
+        "topP": 0.95,
+        "topK": 64,
+    },
+    # Gemini 2.0 models
+    {
+        "name": "models/gemini-2.0-flash",
+        "version": "001",
+        "displayName": "Gemini 2.0 Flash",
+        "description": "Fast and efficient Gemini 2.0 model",
+        "inputTokenLimit": 1048576,
+        "outputTokenLimit": 8192,
+        "supportedGenerationMethods": ["generateContent", "streamGenerateContent"],
+        "temperature": 1.0,
+        "maxTemperature": 2.0,
+        "topP": 0.95,
+        "topK": 64,
+    },
+    {
+        "name": "models/gemini-2.0-flash-lite",
+        "version": "001",
+        "displayName": "Gemini 2.0 Flash Lite",
+        "description": "Lightweight version of Gemini 2.0 Flash",
+        "inputTokenLimit": 1048576,
+        "outputTokenLimit": 8192,
+        "supportedGenerationMethods": ["generateContent", "streamGenerateContent"],
+        "temperature": 1.0,
+        "maxTemperature": 2.0,
+        "topP": 0.95,
+        "topK": 64,
+    },
+    # Gemini 1.5 models
+    {
+        "name": "models/gemini-1.5-pro",
+        "version": "001",
+        "displayName": "Gemini 1.5 Pro",
+        "description": "Advanced multimodal model with 1M context window",
+        "inputTokenLimit": 2097152,
+        "outputTokenLimit": 8192,
+        "supportedGenerationMethods": ["generateContent", "streamGenerateContent"],
+        "temperature": 1.0,
+        "maxTemperature": 2.0,
+        "topP": 0.95,
+        "topK": 64,
+    },
+    {
+        "name": "models/gemini-1.5-flash",
+        "version": "001",
+        "displayName": "Gemini 1.5 Flash",
+        "description": "Fast and efficient model with 1M context window",
+        "inputTokenLimit": 1048576,
+        "outputTokenLimit": 8192,
+        "supportedGenerationMethods": ["generateContent", "streamGenerateContent"],
+        "temperature": 1.0,
+        "maxTemperature": 2.0,
+        "topP": 0.95,
+        "topK": 64,
+    },
+    {
+        "name": "models/gemini-1.5-flash-8b",
+        "version": "001",
+        "displayName": "Gemini 1.5 Flash 8B",
+        "description": "Lightweight 8B parameter version of Gemini 1.5 Flash",
+        "inputTokenLimit": 1048576,
+        "outputTokenLimit": 8192,
+        "supportedGenerationMethods": ["generateContent", "streamGenerateContent"],
+        "temperature": 1.0,
+        "maxTemperature": 2.0,
+        "topP": 0.95,
+        "topK": 64,
+    },
 ]
-
-
-def _generate_search_variants() -> List[Dict[str, Any]]:
-    """Generate search variants for models that support content generation."""
-    search_models = []
-    base_model_with_variance = [
-        model for model in BASE_MODELS if "gemini-2.5-flash-image" not in model["name"]
-    ]
-    for model in base_model_with_variance:
-        if "generateContent" in model["supportedGenerationMethods"]:
-            search_variant = model.copy()
-            search_variant["name"] = model["name"] + "-search"
-            search_variant["displayName"] = model["displayName"] + " with Google Search"
-            search_variant["description"] = (
-                model["description"] + " (includes Google Search grounding)"
-            )
-            search_models.append(search_variant)
-    return search_models
-
-
-def _generate_thinking_variants() -> List[Dict[str, Any]]:
-    """Generate nothinking and maxthinking variants for models that support thinking."""
-    thinking_models = []
-    base_model_with_variance = [
-        model for model in BASE_MODELS if "gemini-2.5-flash-image" not in model["name"]
-    ]
-    for model in base_model_with_variance:
-        if "generateContent" in model["supportedGenerationMethods"] and (
-            "gemini-2.5-flash" in model["name"] or "gemini-2.5-pro" in model["name"]
-        ):
-            # Add -nothinking variant
-            nothinking_variant = model.copy()
-            nothinking_variant["name"] = model["name"] + "-nothinking"
-            nothinking_variant["displayName"] = model["displayName"] + " (No Thinking)"
-            nothinking_variant["description"] = (
-                model["description"] + " (thinking disabled)"
-            )
-            thinking_models.append(nothinking_variant)
-
-            # Add -maxthinking variant
-            maxthinking_variant = model.copy()
-            maxthinking_variant["name"] = model["name"] + "-maxthinking"
-            maxthinking_variant["displayName"] = (
-                model["displayName"] + " (Max Thinking)"
-            )
-            maxthinking_variant["description"] = (
-                model["description"] + " (maximum thinking budget)"
-            )
-            thinking_models.append(maxthinking_variant)
-    return thinking_models
-
-
-# Supported Models (includes base models, search variants, and thinking variants)
-# Combine all models and then sort them by name to group variants together
-_all_models = BASE_MODELS + _generate_search_variants() + _generate_thinking_variants()
-SUPPORTED_MODELS: List[Dict[str, Any]] = sorted(_all_models, key=lambda x: x["name"])
