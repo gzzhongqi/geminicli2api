@@ -15,8 +15,8 @@ from google.auth.transport.requests import Request as GoogleAuthRequest
 
 from .utils import get_user_agent, get_client_metadata
 from .config import (
-    CLIENT_ID, CLIENT_SECRET, SCOPES, CREDENTIAL_FILE,
-    CODE_ASSIST_ENDPOINT, GEMINI_AUTH_PASSWORD
+    settings,
+    CLIENT_ID, CLIENT_SECRET, SCOPES, CODE_ASSIST_ENDPOINT
 )
 
 # --- Global State ---
@@ -44,23 +44,27 @@ class _OAuthCallbackHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(b"<h1>Authentication failed.</h1><p>Please try again.</p>")
 
+
 def authenticate_user(request: Request):
     """Authenticate the user with multiple methods."""
     # Check for API key in query parameters first (for Gemini client compatibility)
     api_key = request.query_params.get("key")
-    if api_key and api_key == GEMINI_AUTH_PASSWORD:
+    auth_password = settings.GEMINI_AUTH_PASSWORD
+    logging.info(f'Api key {api_key} password {auth_password}')
+
+    if api_key and api_key == auth_password:
         return "api_key_user"
     
     # Check for API key in x-goog-api-key header (Google SDK format)
     goog_api_key = request.headers.get("x-goog-api-key", "")
-    if goog_api_key and goog_api_key == GEMINI_AUTH_PASSWORD:
+    if goog_api_key and goog_api_key == auth_password:
         return "goog_api_key_user"
     
     # Check for API key in Authorization header (Bearer token format)
     auth_header = request.headers.get("authorization", "")
     if auth_header.startswith("Bearer "):
         bearer_token = auth_header[7:]
-        if bearer_token == GEMINI_AUTH_PASSWORD:
+        if bearer_token == auth_password:
             return "bearer_user"
     
     # Check for HTTP Basic Authentication
@@ -69,7 +73,7 @@ def authenticate_user(request: Request):
             encoded_credentials = auth_header[6:]
             decoded_credentials = base64.b64decode(encoded_credentials).decode('utf-8', "ignore")
             username, password = decoded_credentials.split(':', 1)
-            if password == GEMINI_AUTH_PASSWORD:
+            if password == auth_password:
                 return username
         except Exception:
             pass
@@ -81,20 +85,23 @@ def authenticate_user(request: Request):
         headers={"WWW-Authenticate": "Basic"},
     )
 
+
 def save_credentials(creds, project_id=None):
     global credentials_from_env
-    
+
+    credentials_file = settings.CREDENTIAL_FILE
+
     # Don't save credentials to file if they came from environment variable,
     # but still save project_id if provided and no file exists or file lacks project_id
     if credentials_from_env:
-        if project_id and os.path.exists(CREDENTIAL_FILE):
+        if project_id and os.path.exists(credentials_file):
             try:
-                with open(CREDENTIAL_FILE, "r") as f:
+                with open(credentials_file, "r") as f:
                     existing_data = json.load(f)
                 # Only update project_id if it's missing from the file
                 if "project_id" not in existing_data:
                     existing_data["project_id"] = project_id
-                    with open(CREDENTIAL_FILE, "w") as f:
+                    with open(credentials_file, "w") as f:
                         json.dump(existing_data, f, indent=2)
                     logging.info(f"Added project_id {project_id} to existing credential file")
             except Exception as e:
@@ -121,17 +128,17 @@ def save_credentials(creds, project_id=None):
     
     if project_id:
         creds_data["project_id"] = project_id
-    elif os.path.exists(CREDENTIAL_FILE):
+    elif os.path.exists(credentials_file):
         try:
-            with open(CREDENTIAL_FILE, "r") as f:
+            with open(credentials_file, "r") as f:
                 existing_data = json.load(f)
                 if "project_id" in existing_data:
                     creds_data["project_id"] = existing_data["project_id"]
-        except Exception:
+        except Exception as e:
+            logging.info(f'Could not read existing project_id from {credentials_file}: {e}')
             pass
-    
-    
-    with open(CREDENTIAL_FILE, "w") as f:
+
+    with open(credentials_file, "w") as f:
         json.dump(creds_data, f, indent=2)
     
 
@@ -143,7 +150,7 @@ def get_credentials(allow_oauth_flow=True):
         return credentials
     
     # Check for credentials in environment variable (JSON string)
-    env_creds_json = os.getenv("GEMINI_CREDENTIALS")
+    env_creds_json = settings.GEMINI_CREDENTIALS
     if env_creds_json:
         # First, check if we have a refresh token - if so, we should always be able to load credentials
         try:
@@ -258,12 +265,13 @@ def get_credentials(allow_oauth_flow=True):
             # Fall through to file-based credentials
     
     # Check for credentials file (CREDENTIAL_FILE now includes GOOGLE_APPLICATION_CREDENTIALS path if set)
-    if os.path.exists(CREDENTIAL_FILE):
+    credentials_file = settings.CREDENTIAL_FILE
+    if os.path.exists(credentials_file):
         # First, check if we have a refresh token - if so, we should always be able to load credentials
         try:
-            with open(CREDENTIAL_FILE, "r") as f:
+            with open(credentials_file, "r") as f:
                 raw_creds_data = json.load(f)
-            
+
             # SAFEGUARD: If refresh_token exists, we should always load credentials successfully
             if "refresh_token" in raw_creds_data and raw_creds_data["refresh_token"]:
                 logging.info("Refresh token found - ensuring credentials load successfully")
@@ -307,7 +315,8 @@ def get_credentials(allow_oauth_flow=True):
                     
                     credentials = Credentials.from_authorized_user_info(creds_data, SCOPES)
                     # Mark as environment credentials if GOOGLE_APPLICATION_CREDENTIALS was used
-                    credentials_from_env = bool(os.getenv("GOOGLE_APPLICATION_CREDENTIALS"))
+                    # (it was, because it is always set, and we are reading from that path)
+                    credentials_from_env = True
 
                     # Try to refresh if expired and refresh token exists
                     if credentials.expired and credentials.refresh_token:
@@ -340,7 +349,7 @@ def get_credentials(allow_oauth_flow=True):
                         }
                         
                         credentials = Credentials.from_authorized_user_info(minimal_creds_data, SCOPES)
-                        credentials_from_env = bool(os.getenv("GOOGLE_APPLICATION_CREDENTIALS"))
+                        credentials_from_env = True
                         
                         # Force refresh since we don't have a valid token
                         try:
@@ -362,7 +371,7 @@ def get_credentials(allow_oauth_flow=True):
                 # Fall through to new login
                 
         except Exception as e:
-            logging.error(f"Failed to read credentials file {CREDENTIAL_FILE}: {e}")
+            logging.error(f"Failed to read credentials file {credentials_file}: {e}")
             # Fall through to new login only if file is completely unreadable
 
     # Only start OAuth flow if explicitly allowed
@@ -519,7 +528,7 @@ def get_user_project_id(creds):
     global user_project_id
     
     # Priority 1: Check environment variable first (always check, even if user_project_id is set)
-    env_project_id = os.getenv("GOOGLE_CLOUD_PROJECT")
+    env_project_id = settings.GOOGLE_CLOUD_PROJECT
     if env_project_id:
         logging.info(f"Using project ID from GOOGLE_CLOUD_PROJECT environment variable: {env_project_id}")
         user_project_id = env_project_id
@@ -532,9 +541,10 @@ def get_user_project_id(creds):
         return user_project_id
 
     # Priority 2: Check cached project ID in credential file
-    if os.path.exists(CREDENTIAL_FILE):
+    credentials_file = settings.CREDENTIAL_FILE
+    if os.path.exists(credentials_file):
         try:
-            with open(CREDENTIAL_FILE, "r") as f:
+            with open(credentials_file, "r") as f:
                 creds_data = json.load(f)
                 cached_project_id = creds_data.get("project_id")
                 if cached_project_id:
