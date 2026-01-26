@@ -3,6 +3,28 @@ Configuration constants for the Geminicli2api proxy server.
 Centralizes all configuration to avoid duplication across modules.
 """
 import os
+from pathlib import Path
+from pydantic import computed_field
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore", enable_decoding=False)
+
+    GEMINI_AUTH_PASSWORD: str = "123456"
+    GEMINI_CREDENTIALS: str | None = None
+    GOOGLE_APPLICATION_CREDENTIALS: str = "oauth_creds.json"
+    GOOGLE_CLOUD_PROJECT: str | None = None
+
+    @computed_field
+    @property
+    def CREDENTIAL_FILE(self) -> str:
+        # config.py -> src -> root
+        project_root = Path(__file__).resolve().parents[1]
+        return str(project_root / self.GOOGLE_APPLICATION_CREDENTIALS)
+
+
+settings = Settings()
 
 # API Endpoints
 CODE_ASSIST_ENDPOINT = "https://cloudcode-pa.googleapis.com"
@@ -18,13 +40,6 @@ SCOPES = [
     "https://www.googleapis.com/auth/userinfo.email",
     "https://www.googleapis.com/auth/userinfo.profile",
 ]
-
-# File Paths
-SCRIPT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-CREDENTIAL_FILE = os.path.join(SCRIPT_DIR, os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "oauth_creds.json"))
-
-# Authentication
-GEMINI_AUTH_PASSWORD = os.getenv("GEMINI_AUTH_PASSWORD", "123456")
 
 # Default Safety Settings for Google API
 DEFAULT_SAFETY_SETTINGS = [
@@ -175,6 +190,7 @@ BASE_MODELS = [
     }
 ]
 
+
 # Generate search variants for applicable models
 def _generate_search_variants():
     """Generate search variants for models that support content generation."""
@@ -190,6 +206,7 @@ def _generate_search_variants():
             search_models.append(search_variant)
     return search_models
 
+
 # Generate thinking variants for applicable models
 def _generate_thinking_variants():
     """Generate nothinking and maxthinking variants for models that support thinking."""
@@ -199,15 +216,14 @@ def _generate_thinking_variants():
         # Only add thinking variants for models that support content generation
         # and contain "gemini-2.5-flash" or "gemini-2.5-pro" in their name
         if ("generateContent" in model["supportedGenerationMethods"] and
-            ("gemini-2.5-flash" in model["name"] or "gemini-2.5-pro" in model["name"])):
-            
+                ("gemini-2.5-flash" in model["name"] or "gemini-2.5-pro" in model["name"])):
             # Add -nothinking variant
             nothinking_variant = model.copy()
             nothinking_variant["name"] = model["name"] + "-nothinking"
             nothinking_variant["displayName"] = model["displayName"] + " (No Thinking)"
             nothinking_variant["description"] = model["description"] + " (thinking disabled)"
             thinking_models.append(nothinking_variant)
-            
+
             # Add -maxthinking variant
             maxthinking_variant = model.copy()
             maxthinking_variant["name"] = model["name"] + "-maxthinking"
@@ -215,6 +231,7 @@ def _generate_thinking_variants():
             maxthinking_variant["description"] = model["description"] + " (maximum thinking budget)"
             thinking_models.append(maxthinking_variant)
     return thinking_models
+
 
 # Generate combined variants (search + thinking combinations)
 def _generate_combined_variants():
@@ -224,15 +241,14 @@ def _generate_combined_variants():
         # Only add combined variants for models that support content generation
         # and contain "gemini-2.5-flash" or "gemini-2.5-pro" in their name
         if ("generateContent" in model["supportedGenerationMethods"] and
-            ("gemini-2.5-flash" in model["name"] or "gemini-2.5-pro" in model["name"])):
-            
+                ("gemini-2.5-flash" in model["name"] or "gemini-2.5-pro" in model["name"])):
             # search + nothinking
             search_nothinking = model.copy()
             search_nothinking["name"] = model["name"] + "-search-nothinking"
             search_nothinking["displayName"] = model["displayName"] + " with Google Search (No Thinking)"
             search_nothinking["description"] = model["description"] + " (includes Google Search grounding, thinking disabled)"
             combined_models.append(search_nothinking)
-            
+
             # search + maxthinking
             search_maxthinking = model.copy()
             search_maxthinking["name"] = model["name"] + "-search-maxthinking"
@@ -241,10 +257,12 @@ def _generate_combined_variants():
             combined_models.append(search_maxthinking)
     return combined_models
 
+
 # Supported Models (includes base models, search variants, and thinking variants)
 # Combine all models and then sort them by name to group variants together
 all_models = BASE_MODELS + _generate_search_variants() + _generate_thinking_variants()
 SUPPORTED_MODELS = sorted(all_models, key=lambda x: x['name'])
+
 
 # Helper function to get base model name from any variant
 def get_base_model_name(model_name):
@@ -256,26 +274,30 @@ def get_base_model_name(model_name):
             return model_name[:-len(suffix)]
     return model_name
 
+
 # Helper function to check if model uses search grounding
 def is_search_model(model_name):
     """Check if model name indicates search grounding should be enabled."""
     return "-search" in model_name
+
 
 # Helper function to check if model uses no thinking
 def is_nothinking_model(model_name):
     """Check if model name indicates thinking should be disabled."""
     return "-nothinking" in model_name
 
+
 # Helper function to check if model uses max thinking
 def is_maxthinking_model(model_name):
     """Check if model name indicates maximum thinking budget should be used."""
     return "-maxthinking" in model_name
 
+
 # Helper function to get thinking budget for a model
 def get_thinking_budget(model_name):
     """Get the appropriate thinking budget for a model based on its name and variant."""
     base_model = get_base_model_name(model_name)
-    
+
     if is_nothinking_model(model_name):
         if "gemini-2.5-flash" in base_model:
             return 0  # No thinking for flash
@@ -293,6 +315,7 @@ def get_thinking_budget(model_name):
     else:
         # Default thinking budget for regular models
         return -1  # Default for all models
+
 
 # Helper function to check if thinking should be included in output
 def should_include_thoughts(model_name):

@@ -5,22 +5,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from .gemini_routes import router as gemini_router
 from .openai_routes import router as openai_router
 from .auth import get_credentials, get_user_project_id, onboard_user
+from .config import settings
 
-# Load environment variables from .env file
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-    logging.info("Environment variables loaded from .env file")
-except ImportError:
-    logging.warning("python-dotenv not installed, .env file will not be loaded automatically")
-except Exception as e:
-    logging.warning(f"Could not load .env file: {e}")
-
-# Configure logging
+# may be ignored if logging is configured by uvicorn first
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
+
+logging.getLogger().setLevel(logging.INFO)
 
 app = FastAPI()
 
@@ -39,13 +32,7 @@ async def startup_event():
         logging.info("Starting Gemini proxy server...")
         
         # Check if credentials exist
-        import os
-        from .config import CREDENTIAL_FILE
-        
-        env_creds_json = os.getenv("GEMINI_CREDENTIALS")
-        creds_file_exists = os.path.exists(CREDENTIAL_FILE)
-        
-        if env_creds_json or creds_file_exists:
+        if os.path.exists(settings.CREDENTIAL_FILE):
             try:
                 # Try to load existing credentials without OAuth flow first
                 creds = get_credentials(allow_oauth_flow=False)
