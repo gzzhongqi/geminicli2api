@@ -316,15 +316,16 @@ def build_gemini_payload_from_native(native_request: dict, model_from_path: str)
     if "thinkingConfig" not in native_request["generationConfig"]:
         native_request["generationConfig"]["thinkingConfig"] = {}
     
-    # Configure thinking based on model variant
-    thinking_budget = get_thinking_budget(model_from_path)
-    include_thoughts = should_include_thoughts(model_from_path)
+    if "gemini-2.5-flash-image" not in model_from_path:
+        # Configure thinking based on model variant
+        thinking_budget = get_thinking_budget(model_from_path)
+        include_thoughts = should_include_thoughts(model_from_path)
     
-    native_request["generationConfig"]["thinkingConfig"]["includeThoughts"] = include_thoughts
-    if "thinkingBudget" in native_request["generationConfig"]["thinkingConfig"] and thinking_budget == -1:
-        pass
-    else:
-        native_request["generationConfig"]["thinkingConfig"]["thinkingBudget"] = thinking_budget
+        native_request["generationConfig"]["thinkingConfig"]["includeThoughts"] = include_thoughts
+        if "thinkingBudget" in native_request["generationConfig"]["thinkingConfig"]:
+            pass
+        else:
+            native_request["generationConfig"]["thinkingConfig"]["thinkingBudget"] = thinking_budget
     
     # Add Google Search grounding for search models
     if is_search_model(model_from_path):

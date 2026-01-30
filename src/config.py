@@ -37,11 +37,25 @@ DEFAULT_SAFETY_SETTINGS = [
     {"category": "HARM_CATEGORY_IMAGE_HARASSMENT", "threshold": "BLOCK_NONE"},
     {"category": "HARM_CATEGORY_IMAGE_HATE", "threshold": "BLOCK_NONE"},
     {"category": "HARM_CATEGORY_IMAGE_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-    {"category": "HARM_CATEGORY_UNSPECIFIED", "threshold": "BLOCK_NONE"}
+    {"category": "HARM_CATEGORY_UNSPECIFIED", "threshold": "BLOCK_NONE"},
+    {"category": "HARM_CATEGORY_JAILBREAK", "threshold": "BLOCK_NONE"}
 ]
 
 # Base Models (without search variants)
 BASE_MODELS = [
+    {
+        "name": "models/gemini-2.5-pro-preview-03-25",
+        "version": "001",
+        "displayName": "Gemini 2.5 Pro Preview 03-25",
+        "description": "Preview version of Gemini 2.5 Pro from May 6th",
+        "inputTokenLimit": 1048576,
+        "outputTokenLimit": 65535,
+        "supportedGenerationMethods": ["generateContent", "streamGenerateContent"],
+        "temperature": 1.0,
+        "maxTemperature": 2.0,
+        "topP": 0.95,
+        "topK": 64
+    },
     {
         "name": "models/gemini-2.5-pro-preview-05-06",
         "version": "001",
@@ -119,6 +133,45 @@ BASE_MODELS = [
         "maxTemperature": 2.0,
         "topP": 0.95,
         "topK": 64
+    },
+    {
+        "name": "models/gemini-2.5-flash-image-preview",
+        "version": "001",
+        "displayName": "Gemini 2.5 Flash Image Preview",
+        "description": "Gemini 2.5 Flash Image Preview",
+        "inputTokenLimit": 32768,
+        "outputTokenLimit": 32768,
+        "supportedGenerationMethods": ["generateContent", "streamGenerateContent"],
+        "temperature": 1.0,
+        "maxTemperature": 2.0,
+        "topP": 0.95,
+        "topK": 64
+    },
+    {
+        "name": "models/gemini-3-pro-preview",
+        "version": "001",
+        "displayName": "Gemini 3.0 Pro Preview 11-2025",
+        "description": "Preview version of Gemini 3.0 Pro from November 2025",
+        "inputTokenLimit": 1048576,
+        "outputTokenLimit": 65535,
+        "supportedGenerationMethods": ["generateContent", "streamGenerateContent"],
+        "temperature": 1.0,
+        "maxTemperature": 2.0,
+        "topP": 0.95,
+        "topK": 64
+    },
+    {
+        "name": "models/gemini-3-flash-preview",
+        "version": "001",
+        "displayName": "Gemini 3.0 Flash Preview",
+        "description": "Preview version of Gemini 3.0 Flash",
+        "inputTokenLimit": 1048576,
+        "outputTokenLimit": 65535,
+        "supportedGenerationMethods": ["generateContent", "streamGenerateContent"],
+        "temperature": 1.0,
+        "maxTemperature": 2.0,
+        "topP": 0.95,
+        "topK": 64
     }
 ]
 
@@ -126,7 +179,8 @@ BASE_MODELS = [
 def _generate_search_variants():
     """Generate search variants for models that support content generation."""
     search_models = []
-    for model in BASE_MODELS:
+    base_model_with_variance = [model for model in BASE_MODELS if "gemini-2.5-flash-image" not in model["name"]]
+    for model in base_model_with_variance:
         # Only add search variants for models that support content generation
         if "generateContent" in model["supportedGenerationMethods"]:
             search_variant = model.copy()
@@ -140,7 +194,8 @@ def _generate_search_variants():
 def _generate_thinking_variants():
     """Generate nothinking and maxthinking variants for models that support thinking."""
     thinking_models = []
-    for model in BASE_MODELS:
+    base_model_with_variance = [model for model in BASE_MODELS if "gemini-2.5-flash-image" not in model["name"]]
+    for model in base_model_with_variance:
         # Only add thinking variants for models that support content generation
         # and contain "gemini-2.5-flash" or "gemini-2.5-pro" in their name
         if ("generateContent" in model["supportedGenerationMethods"] and
@@ -226,11 +281,15 @@ def get_thinking_budget(model_name):
             return 0  # No thinking for flash
         elif "gemini-2.5-pro" in base_model:
             return 128  # Limited thinking for pro
+        elif "gemini-3-pro" in base_model:
+            return 128  # Limited thinking for pro
     elif is_maxthinking_model(model_name):
         if "gemini-2.5-flash" in base_model:
             return 24576
         elif "gemini-2.5-pro" in base_model:
             return 32768
+        elif "gemini-3-pro" in base_model:
+            return 45000
     else:
         # Default thinking budget for regular models
         return -1  # Default for all models
@@ -241,7 +300,7 @@ def should_include_thoughts(model_name):
     if is_nothinking_model(model_name):
         # For nothinking mode, still include thoughts if it's a pro model
         base_model = get_base_model_name(model_name)
-        return "gemini-2.5-pro" in base_model
+        return "gemini-2.5-pro" in base_model or "gemini-3-pro" in base_model
     else:
         # For all other modes, include thoughts
         return True
