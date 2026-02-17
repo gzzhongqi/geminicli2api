@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .gemini_routes import router as gemini_router
 from .openai_routes import router as openai_router
 from .auth import get_credentials, get_user_project_id, onboard_user
+from .http_client import close_http_client
 
 # Load environment variables from .env file
 try:
@@ -51,9 +52,9 @@ async def startup_event():
                 creds = get_credentials(allow_oauth_flow=False)
                 if creds:
                     try:
-                        proj_id = get_user_project_id(creds)
+                        proj_id = await get_user_project_id(creds)
                         if proj_id:
-                            onboard_user(creds, proj_id)
+                            await onboard_user(creds, proj_id)
                             logging.info(f"Successfully onboarded with project ID: {proj_id}")
                         logging.info("Gemini proxy server started successfully")
                         logging.info("Authentication required - Password: see .env file")
@@ -72,9 +73,9 @@ async def startup_event():
                 creds = get_credentials(allow_oauth_flow=True)
                 if creds:
                     try:
-                        proj_id = get_user_project_id(creds)
+                        proj_id = await get_user_project_id(creds)
                         if proj_id:
-                            onboard_user(creds, proj_id)
+                            await onboard_user(creds, proj_id)
                             logging.info(f"Successfully onboarded with project ID: {proj_id}")
                         logging.info("Gemini proxy server started successfully")
                     except Exception as e:
@@ -91,6 +92,10 @@ async def startup_event():
     except Exception as e:
         logging.error(f"Startup error: {str(e)}")
         logging.warning("Server may not function properly.")
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    await close_http_client()
 
 @app.options("/{full_path:path}")
 async def handle_preflight(request: Request, full_path: str):

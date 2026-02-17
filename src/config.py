@@ -7,6 +7,18 @@ import os
 # API Endpoints
 CODE_ASSIST_ENDPOINT = "https://cloudcode-pa.googleapis.com"
 
+# Upstream HTTP robustness
+UPSTREAM_CONNECT_TIMEOUT_S = float(os.getenv("UPSTREAM_CONNECT_TIMEOUT_S", "10"))
+UPSTREAM_READ_TIMEOUT_S = float(os.getenv("UPSTREAM_READ_TIMEOUT_S", "60"))
+UPSTREAM_STREAM_READ_TIMEOUT_S = os.getenv("UPSTREAM_STREAM_READ_TIMEOUT_S", "")
+UPSTREAM_MAX_ATTEMPTS = int(os.getenv("UPSTREAM_MAX_ATTEMPTS", "4"))
+UPSTREAM_BACKOFF_BASE_S = float(os.getenv("UPSTREAM_BACKOFF_BASE_S", "0.5"))
+UPSTREAM_BACKOFF_MAX_S = float(os.getenv("UPSTREAM_BACKOFF_MAX_S", "8"))
+UPSTREAM_MAX_CONNECTIONS = int(os.getenv("UPSTREAM_MAX_CONNECTIONS", "100"))
+UPSTREAM_MAX_KEEPALIVE_CONNECTIONS = int(os.getenv("UPSTREAM_MAX_KEEPALIVE_CONNECTIONS", "20"))
+ONBOARD_POLL_INTERVAL_S = float(os.getenv("ONBOARD_POLL_INTERVAL_S", "2.5"))
+ONBOARD_MAX_WAIT_S = float(os.getenv("ONBOARD_MAX_WAIT_S", "90"))
+
 # Client Configuration
 CLI_VERSION = "0.1.5"  # Match current gemini-cli version
 
