@@ -10,7 +10,7 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy dependency metadata first for better caching
-COPY pyproject.toml pdm.toml ./
+COPY pyproject.toml ./
 
 # Install PDM + uv, then project dependencies
 RUN pip install --no-cache-dir pdm uv \
