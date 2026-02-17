@@ -38,7 +38,7 @@ A FastAPI-based proxy server that converts the Gemini CLI tool into both OpenAI-
 
 ### Optional Robustness / Retry Tuning
 - `UPSTREAM_CONNECT_TIMEOUT_S` (default: `10`, set to `0` or `None` for no timeout)
-- `UPSTREAM_READ_TIMEOUT_S` (default: `60`, set to `0` or `None` for no timeout)
+- `UPSTREAM_READ_TIMEOUT_S` (default: `0` (None), set to `0` or `None` for no timeout)
 - `UPSTREAM_STREAM_READ_TIMEOUT_S` (default: unset = no read timeout for streams)
 - `UPSTREAM_MAX_ATTEMPTS` (default: `4`)
 - `UPSTREAM_BACKOFF_BASE_S` (default: `0.5`)
@@ -127,38 +127,6 @@ This project is configured for Hugging Face Spaces deployment:
    - `GEMINI_CREDENTIALS` (or other credential source)
 
 The Space will automatically build and deploy using the included Dockerfile.
-
-## 🛠️ Development
-
-This project uses [PDM](https://pdm-project.org/) for package and dependency management.
-
-### Prerequisites
-
-Ensure you have PDM installed. If you don't have it, you can install it using:
-```bash
-curl -sSL https://pdm-project.org/install-pdm.py | python3 -
-```
-
-For faster dependency resolution, you can configure PDM to use `uv`:
-```bash
-pdm config use_uv true
-```
-
-### Installation
-
-Clone the repository and install the dependencies into a local virtual environment:
-```bash
-git clone https://github.com/KapyAgent/geminicli2api.git
-cd geminicli2api
-pdm install
-```
-
-### Running Locally
-
-You can run the application directly using PDM:
-```bash
-pdm run python run.py
-```
 
 ## 📝 OpenAI API Example
 
