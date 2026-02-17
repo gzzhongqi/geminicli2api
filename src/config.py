@@ -3,14 +3,24 @@ Configuration constants for the Geminicli2api proxy server.
 Centralizes all configuration to avoid duplication across modules.
 """
 import os
+from typing import Optional
+
+def _parse_opt_float(val: str) -> Optional[float]:
+    if not val or val.lower() in ("none", "0", "-1"):
+        return None
+    try:
+        f_val = float(val)
+        return f_val if f_val > 0 else None
+    except ValueError:
+        return None
 
 # API Endpoints
 CODE_ASSIST_ENDPOINT = "https://cloudcode-pa.googleapis.com"
 
 # Upstream HTTP robustness
-UPSTREAM_CONNECT_TIMEOUT_S = float(os.getenv("UPSTREAM_CONNECT_TIMEOUT_S", "10"))
-UPSTREAM_READ_TIMEOUT_S = float(os.getenv("UPSTREAM_READ_TIMEOUT_S", "60"))
-UPSTREAM_STREAM_READ_TIMEOUT_S = os.getenv("UPSTREAM_STREAM_READ_TIMEOUT_S", "")
+UPSTREAM_CONNECT_TIMEOUT_S = _parse_opt_float(os.getenv("UPSTREAM_CONNECT_TIMEOUT_S", "10"))
+UPSTREAM_READ_TIMEOUT_S = _parse_opt_float(os.getenv("UPSTREAM_READ_TIMEOUT_S", "60"))
+UPSTREAM_STREAM_READ_TIMEOUT_S = _parse_opt_float(os.getenv("UPSTREAM_STREAM_READ_TIMEOUT_S", ""))
 UPSTREAM_MAX_ATTEMPTS = int(os.getenv("UPSTREAM_MAX_ATTEMPTS", "8"))
 UPSTREAM_BACKOFF_BASE_S = float(os.getenv("UPSTREAM_BACKOFF_BASE_S", "1.0"))
 UPSTREAM_BACKOFF_MAX_S = float(os.getenv("UPSTREAM_BACKOFF_MAX_S", "30"))
