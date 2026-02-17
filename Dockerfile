@@ -9,25 +9,24 @@ RUN apt-get update && apt-get install -y \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy dependency metadata first for better caching
-COPY pyproject.toml ./
-
 # Install PDM + uv, then project dependencies
-RUN pip install --no-cache-dir pdm uv \
-    && pdm install --prod --no-editable --no-self
-
-# Copy application code
-COPY . .
+RUN pip install --no-cache-dir pdm uv
 
 # Create non-root user for security
 RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
+
+# Copy application code (ensure appuser owns the files)
+COPY --chown=appuser:appuser . .
+
 USER appuser
+
+RUN pdm config use_uv true \
+    && pdm sync --prod
 
 # Expose ports (8888 for compatibility, 7860 for Hugging Face)
 EXPOSE 8888 7860
 
 # Set environment variables
-ENV PYTHONPATH=/app
 ENV HOST=0.0.0.0
 ENV PORT=7860
 
