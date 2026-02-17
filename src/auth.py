@@ -3,6 +3,8 @@ import json
 import base64
 import time
 import logging
+import asyncio
+import httpx
 from datetime import datetime
 from fastapi import Request, HTTPException, Depends
 from fastapi.security import HTTPBasic
@@ -14,9 +16,14 @@ from google_auth_oauthlib.flow import Flow
 from google.auth.transport.requests import Request as GoogleAuthRequest
 
 from .utils import get_user_agent, get_client_metadata
+from .http_client import get_http_client
+from .http_retry import RetryConfig, post_with_retry
 from .config import (
     CLIENT_ID, CLIENT_SECRET, SCOPES, CREDENTIAL_FILE,
-    CODE_ASSIST_ENDPOINT, GEMINI_AUTH_PASSWORD
+    CODE_ASSIST_ENDPOINT, GEMINI_AUTH_PASSWORD,
+    UPSTREAM_CONNECT_TIMEOUT_S, UPSTREAM_READ_TIMEOUT_S,
+    UPSTREAM_MAX_ATTEMPTS, UPSTREAM_BACKOFF_BASE_S, UPSTREAM_BACKOFF_MAX_S,
+    ONBOARD_POLL_INTERVAL_S, ONBOARD_MAX_WAIT_S,
 )
 
 # --- Global State ---
@@ -431,7 +438,7 @@ def get_credentials(allow_oauth_flow=True):
     finally:
         oauthlib.oauth2.rfc6749.parameters.validate_token_parameters = original_validate
 
-def onboard_user(creds, project_id):
+async def onboard_user(creds, project_id):
     """Ensures the user is onboarded, matching gemini-cli setupUser behavior."""
     global onboarding_complete
     if onboarding_complete:
@@ -455,11 +462,21 @@ def onboard_user(creds, project_id):
     }
     
     try:
-        import requests
-        resp = requests.post(
+        client = get_http_client()
+        retry_cfg = RetryConfig(
+            max_attempts=UPSTREAM_MAX_ATTEMPTS,
+            base_delay_s=UPSTREAM_BACKOFF_BASE_S,
+            max_delay_s=UPSTREAM_BACKOFF_MAX_S,
+            retryable_status_codes=frozenset({429, 500, 502, 503, 504}),
+        )
+        timeout = httpx.Timeout(connect=UPSTREAM_CONNECT_TIMEOUT_S, read=UPSTREAM_READ_TIMEOUT_S)
+        resp = await post_with_retry(
+            client,
             f"{CODE_ASSIST_ENDPOINT}/v1internal:loadCodeAssist",
-            data=json.dumps(load_assist_payload),
             headers=headers,
+            content=json.dumps(load_assist_payload),
+            timeout=timeout,
+            retry_config=retry_cfg,
         )
         resp.raise_for_status()
         load_data = resp.json()
@@ -494,11 +511,15 @@ def onboard_user(creds, project_id):
             "metadata": get_client_metadata(project_id),
         }
 
+        deadline = time.monotonic() + ONBOARD_MAX_WAIT_S
         while True:
-            onboard_resp = requests.post(
+            onboard_resp = await post_with_retry(
+                client,
                 f"{CODE_ASSIST_ENDPOINT}/v1internal:onboardUser",
-                data=json.dumps(onboard_req_payload),
                 headers=headers,
+                content=json.dumps(onboard_req_payload),
+                timeout=timeout,
+                retry_config=retry_cfg,
             )
             onboard_resp.raise_for_status()
             lro_data = onboard_resp.json()
@@ -506,15 +527,26 @@ def onboard_user(creds, project_id):
             if lro_data.get("done"):
                 onboarding_complete = True
                 break
-            
-            time.sleep(5)
 
-    except requests.exceptions.HTTPError as e:
-        raise Exception(f"User onboarding failed. Please check your Google Cloud project permissions and try again. Error: {e.response.text if hasattr(e, 'response') else str(e)}")
+            if time.monotonic() >= deadline:
+                raise TimeoutError("Onboarding did not complete before ONBOARD_MAX_WAIT_S")
+
+            await asyncio.sleep(ONBOARD_POLL_INTERVAL_S)
+
+    except httpx.HTTPStatusError as e:
+        body = ""
+        try:
+            body = e.response.text
+        except Exception:
+            pass
+        raise Exception(
+            "User onboarding failed. Please check your Google Cloud project permissions and try again. "
+            f"Error: {body or str(e)}"
+        )
     except Exception as e:
         raise Exception(f"User onboarding failed due to an unexpected error: {str(e)}")
 
-def get_user_project_id(creds):
+async def get_user_project_id(creds):
     """Gets the user's project ID matching gemini-cli setupUser logic."""
     global user_project_id
     
@@ -570,12 +602,22 @@ def get_user_project_id(creds):
     }
 
     try:
-        import requests
         logging.info("Attempting to discover project ID via API call...")
-        resp = requests.post(
+        client = get_http_client()
+        retry_cfg = RetryConfig(
+            max_attempts=UPSTREAM_MAX_ATTEMPTS,
+            base_delay_s=UPSTREAM_BACKOFF_BASE_S,
+            max_delay_s=UPSTREAM_BACKOFF_MAX_S,
+            retryable_status_codes=frozenset({429, 500, 502, 503, 504}),
+        )
+        timeout = httpx.Timeout(connect=UPSTREAM_CONNECT_TIMEOUT_S, read=UPSTREAM_READ_TIMEOUT_S)
+        resp = await post_with_retry(
+            client,
             f"{CODE_ASSIST_ENDPOINT}/v1internal:loadCodeAssist",
-            data=json.dumps(probe_payload),
             headers=headers,
+            content=json.dumps(probe_payload),
+            timeout=timeout,
+            retry_config=retry_cfg,
         )
         resp.raise_for_status()
         data = resp.json()
@@ -588,10 +630,12 @@ def get_user_project_id(creds):
         save_credentials(creds, user_project_id)
         
         return user_project_id
-    except requests.exceptions.HTTPError as e:
+    except httpx.HTTPStatusError as e:
         logging.error(f"HTTP error during project ID discovery: {e}")
-        if hasattr(e, 'response') and e.response:
+        try:
             logging.error(f"Response status: {e.response.status_code}, body: {e.response.text}")
+        except Exception:
+            pass
         raise Exception(f"Failed to discover project ID via API: {e}")
     except Exception as e:
         logging.error(f"Unexpected error during project ID discovery: {e}")
