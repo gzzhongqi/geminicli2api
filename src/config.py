@@ -20,7 +20,7 @@ CODE_ASSIST_ENDPOINT = "https://cloudcode-pa.googleapis.com"
 # Upstream HTTP robustness
 UPSTREAM_CONNECT_TIMEOUT_S = _parse_opt_float(os.getenv("UPSTREAM_CONNECT_TIMEOUT_S", "10"))
 UPSTREAM_READ_TIMEOUT_S = _parse_opt_float(os.getenv("UPSTREAM_READ_TIMEOUT_S", "0"))
-UPSTREAM_STREAM_READ_TIMEOUT_S = _parse_opt_float(os.getenv("UPSTREAM_STREAM_READ_TIMEOUT_S", ""))
+UPSTREAM_STREAM_READ_TIMEOUT_S = _parse_opt_float(os.getenv("UPSTREAM_STREAM_READ_TIMEOUT_S", "0"))
 UPSTREAM_MAX_ATTEMPTS = int(os.getenv("UPSTREAM_MAX_ATTEMPTS", "4"))
 UPSTREAM_BACKOFF_BASE_S = float(os.getenv("UPSTREAM_BACKOFF_BASE_S", "0.5"))
 UPSTREAM_BACKOFF_MAX_S = float(os.getenv("UPSTREAM_BACKOFF_MAX_S", "8"))
