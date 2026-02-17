@@ -114,7 +114,7 @@ async def send_gemini_request(payload: dict, is_streaming: bool = False) -> Resp
                 final_post_data=final_post_data,
                 retry_cfg=retry_cfg,
             )
-        timeout = httpx.Timeout(connect=UPSTREAM_CONNECT_TIMEOUT_S, read=UPSTREAM_READ_TIMEOUT_S)
+        timeout = httpx.Timeout(timeout=None, connect=UPSTREAM_CONNECT_TIMEOUT_S, read=UPSTREAM_READ_TIMEOUT_S)
         resp = await post_with_retry(
             client,
             target_url,
@@ -155,6 +155,7 @@ def _handle_streaming_response(
         try:
             stream_read_timeout_s = UPSTREAM_STREAM_READ_TIMEOUT_S
             timeout = httpx.Timeout(
+                timeout=None,
                 connect=UPSTREAM_CONNECT_TIMEOUT_S,
                 read=stream_read_timeout_s,
             )
