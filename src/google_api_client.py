@@ -153,12 +153,7 @@ def _handle_streaming_response(
     async def stream_generator():
         started = False
         try:
-            stream_read_timeout_s = None
-            if UPSTREAM_STREAM_READ_TIMEOUT_S:
-                try:
-                    stream_read_timeout_s = float(UPSTREAM_STREAM_READ_TIMEOUT_S)
-                except ValueError:
-                    stream_read_timeout_s = None
+            stream_read_timeout_s = UPSTREAM_STREAM_READ_TIMEOUT_S
             timeout = httpx.Timeout(
                 connect=UPSTREAM_CONNECT_TIMEOUT_S,
                 read=stream_read_timeout_s,

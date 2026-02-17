@@ -37,8 +37,8 @@ A FastAPI-based proxy server that converts the Gemini CLI tool into both OpenAI-
 - `GEMINI_PROJECT_ID`: Alternative project ID variable
 
 ### Optional Robustness / Retry Tuning
-- `UPSTREAM_CONNECT_TIMEOUT_S` (default: `10`)
-- `UPSTREAM_READ_TIMEOUT_S` (default: `60`)
+- `UPSTREAM_CONNECT_TIMEOUT_S` (default: `10`, set to `0` or `None` for no timeout)
+- `UPSTREAM_READ_TIMEOUT_S` (default: `60`, set to `0` or `None` for no timeout)
 - `UPSTREAM_STREAM_READ_TIMEOUT_S` (default: unset = no read timeout for streams)
 - `UPSTREAM_MAX_ATTEMPTS` (default: `4`)
 - `UPSTREAM_BACKOFF_BASE_S` (default: `0.5`)
