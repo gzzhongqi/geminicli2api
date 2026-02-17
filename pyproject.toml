@@ -1,0 +1,28 @@
+[project]
+name = "geminicli2api"
+version = "1.0.0"
+description = "FastAPI proxy that exposes OpenAI-compatible and native Gemini endpoints backed by Google's Code Assist/Gemini API."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi",
+  "uvicorn[standard]",
+  "requests",
+  "httpx",
+  "python-dotenv",
+  "google-auth-oauthlib",
+  "pydantic",
+]
+
+
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.pdm]
+distribution = false
+
+[tool.pdm.scripts]
+start = "python run.py"
+hf = "python app.py"
+dev = "uvicorn src.main:app --reload --host ${HOST:-0.0.0.0} --port ${PORT:-8888}"
