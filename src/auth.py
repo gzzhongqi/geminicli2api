@@ -109,6 +109,10 @@ def save_credentials(creds, project_id=None):
                 logging.warning(f"Could not update project_id in credential file: {e}")
         return
     
+    parent_dir = os.path.dirname(CREDENTIAL_FILE)
+    if parent_dir:
+        os.makedirs(parent_dir, exist_ok=True)
+
     creds_data = {
         "client_id": CLIENT_ID,
         "client_secret": CLIENT_SECRET,
@@ -271,6 +275,13 @@ def get_credentials(allow_oauth_flow=True):
         try:
             with open(CREDENTIAL_FILE, "r") as f:
                 raw_creds_data = json.load(f)
+
+            if raw_creds_data.get("type") == "service_account":
+                logging.warning(
+                    "Credentials file appears to be a service account key (type=service_account). "
+                    "This proxy expects OAuth user credentials (authorized_user) with a refresh_token. "
+                    "Set GEMINI_CREDENTIALS or run the OAuth flow to generate an oauth_creds.json file."
+                )
             
             # SAFEGUARD: If refresh_token exists, we should always load credentials successfully
             if "refresh_token" in raw_creds_data and raw_creds_data["refresh_token"]:
@@ -314,8 +325,7 @@ def get_credentials(allow_oauth_flow=True):
                                 del creds_data["expiry"]
                     
                     credentials = Credentials.from_authorized_user_info(creds_data, SCOPES)
-                    # Mark as environment credentials if GOOGLE_APPLICATION_CREDENTIALS was used
-                    credentials_from_env = settings.GOOGLE_APPLICATION_CREDENTIALS != "oauth_creds.json"
+                    credentials_from_env = False  # Credentials came from a file, not from env JSON
 
                     # Try to refresh if expired and refresh token exists
                     if credentials.expired and credentials.refresh_token:
@@ -348,7 +358,7 @@ def get_credentials(allow_oauth_flow=True):
                         }
                         
                         credentials = Credentials.from_authorized_user_info(minimal_creds_data, SCOPES)
-                        credentials_from_env = settings.GOOGLE_APPLICATION_CREDENTIALS != "oauth_creds.json"
+                        credentials_from_env = False  # Credentials came from a file, not from env JSON
                         
                         # Force refresh since we don't have a valid token
                         try:

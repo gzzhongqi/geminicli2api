@@ -3,13 +3,23 @@ Configuration constants for the Geminicli2api proxy server.
 Centralizes all configuration to avoid duplication across modules.
 """
 import os
+from pathlib import Path
 from typing import Optional, List, Any
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+def _resolve_project_path(path: str) -> str:
+    expanded = os.path.expandvars(os.path.expanduser(path.strip()))
+    p = Path(expanded)
+    if not p.is_absolute():
+        p = PROJECT_ROOT / p
+    return str(p)
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=str(PROJECT_ROOT / ".env"),
         env_file_encoding="utf-8",
         extra="ignore"
     )
@@ -48,6 +58,15 @@ class Settings(BaseSettings):
     # Authentication
     GEMINI_AUTH_PASSWORD: str = "123456"
     GEMINI_CREDENTIALS: Optional[str] = None
+
+    @field_validator("GOOGLE_APPLICATION_CREDENTIALS", mode="before")
+    @classmethod
+    def _default_credentials_file_if_blank(cls, val: Any) -> str:
+        if val is None:
+            return "oauth_creds.json"
+        if isinstance(val, str) and not val.strip():
+            return "oauth_creds.json"
+        return val
 
     @field_validator("UPSTREAM_CONNECT_TIMEOUT_S", "UPSTREAM_READ_TIMEOUT_S", "UPSTREAM_STREAM_READ_TIMEOUT_S", mode="before")
     @classmethod
@@ -96,9 +115,9 @@ SCOPES = settings.SCOPES
 GEMINI_AUTH_PASSWORD = settings.GEMINI_AUTH_PASSWORD
 
 # File Paths
-SCRIPT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-# If settings.GOOGLE_APPLICATION_CREDENTIALS is an absolute path, os.path.join returns it as is.
-CREDENTIAL_FILE = os.path.join(SCRIPT_DIR, settings.GOOGLE_APPLICATION_CREDENTIALS)
+# NOTE: `GOOGLE_APPLICATION_CREDENTIALS` is treated as a path to the OAuth credential JSON used by this proxy.
+# It may be absolute or relative to the project root; `~` and `$VARS` are expanded.
+CREDENTIAL_FILE = _resolve_project_path(settings.GOOGLE_APPLICATION_CREDENTIALS)
 
 # Default Safety Settings for Google API
 DEFAULT_SAFETY_SETTINGS = [
