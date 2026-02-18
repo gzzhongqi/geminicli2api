@@ -28,10 +28,10 @@ class Settings(BaseSettings):
     CODE_ASSIST_ENDPOINT: str = "https://cloudcode-pa.googleapis.com"
 
     # Upstream HTTP robustness
-    UPSTREAM_CONNECT_TIMEOUT_S: Optional[float] = Field(20.0)
+    UPSTREAM_CONNECT_TIMEOUT_S: Optional[float] = Field(5.0)
     UPSTREAM_READ_TIMEOUT_S: Optional[float] = Field(None)
     UPSTREAM_STREAM_READ_TIMEOUT_S: Optional[float] = Field(None)
-    UPSTREAM_MAX_ATTEMPTS: int = 10
+    UPSTREAM_MAX_ATTEMPTS: int = 6
     UPSTREAM_BACKOFF_BASE_S: float = 1.0
     UPSTREAM_BACKOFF_MAX_S: float = 30.0
     UPSTREAM_MAX_CONNECTIONS: int = 100
