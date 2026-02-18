@@ -3,50 +3,102 @@ Configuration constants for the Geminicli2api proxy server.
 Centralizes all configuration to avoid duplication across modules.
 """
 import os
-from typing import Optional
+from typing import Optional, List, Any
+from pydantic import Field, field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
-def _parse_opt_float(val: str) -> Optional[float]:
-    if not val or val.lower() in ("none", "0", "-1"):
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore"
+    )
+
+    # API Endpoints
+    CODE_ASSIST_ENDPOINT: str = "https://cloudcode-pa.googleapis.com"
+
+    # Upstream HTTP robustness
+    UPSTREAM_CONNECT_TIMEOUT_S: Optional[float] = Field(20.0)
+    UPSTREAM_READ_TIMEOUT_S: Optional[float] = Field(None)
+    UPSTREAM_STREAM_READ_TIMEOUT_S: Optional[float] = Field(None)
+    UPSTREAM_MAX_ATTEMPTS: int = 10
+    UPSTREAM_BACKOFF_BASE_S: float = 1.0
+    UPSTREAM_BACKOFF_MAX_S: float = 30.0
+    UPSTREAM_MAX_CONNECTIONS: int = 100
+    UPSTREAM_MAX_KEEPALIVE_CONNECTIONS: int = 20
+    ONBOARD_POLL_INTERVAL_S: float = 2.5
+    ONBOARD_MAX_WAIT_S: float = 90.0
+
+    # Client Configuration
+    CLI_VERSION: str = "0.1.5"  # Match current gemini-cli version
+
+    # OAuth Configuration
+    CLIENT_ID: str = "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com"
+    CLIENT_SECRET: str = "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"
+    SCOPES: List[str] = [
+        "https://www.googleapis.com/auth/cloud-platform",
+        "https://www.googleapis.com/auth/userinfo.email",
+        "https://www.googleapis.com/auth/userinfo.profile",
+    ]
+
+    # File Paths
+    GOOGLE_APPLICATION_CREDENTIALS: str = Field("oauth_creds.json")
+    GOOGLE_CLOUD_PROJECT: Optional[str] = None
+
+    # Authentication
+    GEMINI_AUTH_PASSWORD: str = "123456"
+    GEMINI_CREDENTIALS: Optional[str] = None
+
+    @field_validator("UPSTREAM_CONNECT_TIMEOUT_S", "UPSTREAM_READ_TIMEOUT_S", "UPSTREAM_STREAM_READ_TIMEOUT_S", mode="before")
+    @classmethod
+    def _parse_opt_float(cls, val: Any) -> Optional[float]:
+        if val is None:
+            return None
+        if isinstance(val, str):
+            if not val or val.lower() in ("none", "0", "-1"):
+                return None
+            try:
+                f_val = float(val)
+                return f_val if f_val > 0 else None
+            except ValueError:
+                return None
+        if isinstance(val, (int, float)):
+            return float(val) if val > 0 else None
         return None
-    try:
-        f_val = float(val)
-        return f_val if f_val > 0 else None
-    except ValueError:
-        return None
+
+# Global settings instance
+settings = Settings()
 
 # API Endpoints
-CODE_ASSIST_ENDPOINT = "https://cloudcode-pa.googleapis.com"
+CODE_ASSIST_ENDPOINT = settings.CODE_ASSIST_ENDPOINT
 
 # Upstream HTTP robustness
-UPSTREAM_CONNECT_TIMEOUT_S = _parse_opt_float(os.getenv("UPSTREAM_CONNECT_TIMEOUT_S", "20"))
-UPSTREAM_READ_TIMEOUT_S = _parse_opt_float(os.getenv("UPSTREAM_READ_TIMEOUT_S", "0"))
-UPSTREAM_STREAM_READ_TIMEOUT_S = _parse_opt_float(os.getenv("UPSTREAM_STREAM_READ_TIMEOUT_S", "0"))
-UPSTREAM_MAX_ATTEMPTS = int(os.getenv("UPSTREAM_MAX_ATTEMPTS", "10"))
-UPSTREAM_BACKOFF_BASE_S = float(os.getenv("UPSTREAM_BACKOFF_BASE_S", "1.0"))
-UPSTREAM_BACKOFF_MAX_S = float(os.getenv("UPSTREAM_BACKOFF_MAX_S", "30"))
-UPSTREAM_MAX_CONNECTIONS = int(os.getenv("UPSTREAM_MAX_CONNECTIONS", "100"))
-UPSTREAM_MAX_KEEPALIVE_CONNECTIONS = int(os.getenv("UPSTREAM_MAX_KEEPALIVE_CONNECTIONS", "20"))
-ONBOARD_POLL_INTERVAL_S = float(os.getenv("ONBOARD_POLL_INTERVAL_S", "2.5"))
-ONBOARD_MAX_WAIT_S = float(os.getenv("ONBOARD_MAX_WAIT_S", "90"))
+UPSTREAM_CONNECT_TIMEOUT_S = settings.UPSTREAM_CONNECT_TIMEOUT_S
+UPSTREAM_READ_TIMEOUT_S = settings.UPSTREAM_READ_TIMEOUT_S
+UPSTREAM_STREAM_READ_TIMEOUT_S = settings.UPSTREAM_STREAM_READ_TIMEOUT_S
+UPSTREAM_MAX_ATTEMPTS = settings.UPSTREAM_MAX_ATTEMPTS
+UPSTREAM_BACKOFF_BASE_S = settings.UPSTREAM_BACKOFF_BASE_S
+UPSTREAM_BACKOFF_MAX_S = settings.UPSTREAM_BACKOFF_MAX_S
+UPSTREAM_MAX_CONNECTIONS = settings.UPSTREAM_MAX_CONNECTIONS
+UPSTREAM_MAX_KEEPALIVE_CONNECTIONS = settings.UPSTREAM_MAX_KEEPALIVE_CONNECTIONS
+ONBOARD_POLL_INTERVAL_S = settings.ONBOARD_POLL_INTERVAL_S
+ONBOARD_MAX_WAIT_S = settings.ONBOARD_MAX_WAIT_S
 
 # Client Configuration
-CLI_VERSION = "0.1.5"  # Match current gemini-cli version
+CLI_VERSION = settings.CLI_VERSION
 
 # OAuth Configuration
-CLIENT_ID = "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com"
-CLIENT_SECRET = "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"
-SCOPES = [
-    "https://www.googleapis.com/auth/cloud-platform",
-    "https://www.googleapis.com/auth/userinfo.email",
-    "https://www.googleapis.com/auth/userinfo.profile",
-]
+CLIENT_ID = settings.CLIENT_ID
+CLIENT_SECRET = settings.CLIENT_SECRET
+SCOPES = settings.SCOPES
+
+# Authentication
+GEMINI_AUTH_PASSWORD = settings.GEMINI_AUTH_PASSWORD
 
 # File Paths
 SCRIPT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-CREDENTIAL_FILE = os.path.join(SCRIPT_DIR, os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "oauth_creds.json"))
-
-# Authentication
-GEMINI_AUTH_PASSWORD = os.getenv("GEMINI_AUTH_PASSWORD", "123456")
+# If settings.GOOGLE_APPLICATION_CREDENTIALS is an absolute path, os.path.join returns it as is.
+CREDENTIAL_FILE = os.path.join(SCRIPT_DIR, settings.GOOGLE_APPLICATION_CREDENTIALS)
 
 # Default Safety Settings for Google API
 DEFAULT_SAFETY_SETTINGS = [

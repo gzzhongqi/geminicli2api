@@ -24,6 +24,7 @@ from .config import (
     UPSTREAM_CONNECT_TIMEOUT_S, UPSTREAM_READ_TIMEOUT_S,
     UPSTREAM_MAX_ATTEMPTS, UPSTREAM_BACKOFF_BASE_S, UPSTREAM_BACKOFF_MAX_S,
     ONBOARD_POLL_INTERVAL_S, ONBOARD_MAX_WAIT_S,
+    settings,
 )
 
 # --- Global State ---
@@ -150,7 +151,7 @@ def get_credentials(allow_oauth_flow=True):
         return credentials
     
     # Check for credentials in environment variable (JSON string)
-    env_creds_json = os.getenv("GEMINI_CREDENTIALS")
+    env_creds_json = settings.GEMINI_CREDENTIALS
     if env_creds_json:
         # First, check if we have a refresh token - if so, we should always be able to load credentials
         try:
@@ -314,7 +315,7 @@ def get_credentials(allow_oauth_flow=True):
                     
                     credentials = Credentials.from_authorized_user_info(creds_data, SCOPES)
                     # Mark as environment credentials if GOOGLE_APPLICATION_CREDENTIALS was used
-                    credentials_from_env = bool(os.getenv("GOOGLE_APPLICATION_CREDENTIALS"))
+                    credentials_from_env = settings.GOOGLE_APPLICATION_CREDENTIALS != "oauth_creds.json"
 
                     # Try to refresh if expired and refresh token exists
                     if credentials.expired and credentials.refresh_token:
@@ -347,7 +348,7 @@ def get_credentials(allow_oauth_flow=True):
                         }
                         
                         credentials = Credentials.from_authorized_user_info(minimal_creds_data, SCOPES)
-                        credentials_from_env = bool(os.getenv("GOOGLE_APPLICATION_CREDENTIALS"))
+                        credentials_from_env = settings.GOOGLE_APPLICATION_CREDENTIALS != "oauth_creds.json"
                         
                         # Force refresh since we don't have a valid token
                         try:
@@ -551,7 +552,7 @@ async def get_user_project_id(creds):
     global user_project_id
     
     # Priority 1: Check environment variable first (always check, even if user_project_id is set)
-    env_project_id = os.getenv("GOOGLE_CLOUD_PROJECT")
+    env_project_id = settings.GOOGLE_CLOUD_PROJECT
     if env_project_id:
         logging.info(f"Using project ID from GOOGLE_CLOUD_PROJECT environment variable: {env_project_id}")
         user_project_id = env_project_id

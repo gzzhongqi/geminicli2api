@@ -12,6 +12,7 @@ dependencies = [
   "python-dotenv",
   "google-auth-oauthlib",
   "pydantic",
+  "pydantic-settings>=2.13.0",
 ]
 
 

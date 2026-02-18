@@ -6,16 +6,7 @@ from .gemini_routes import router as gemini_router
 from .openai_routes import router as openai_router
 from .auth import get_credentials, get_user_project_id, onboard_user
 from .http_client import close_http_client
-
-# Load environment variables from .env file
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-    logging.info("Environment variables loaded from .env file")
-except ImportError:
-    logging.warning("python-dotenv not installed, .env file will not be loaded automatically")
-except Exception as e:
-    logging.warning(f"Could not load .env file: {e}")
+from .config import settings, CREDENTIAL_FILE
 
 # Configure logging
 logging.basicConfig(
@@ -40,10 +31,7 @@ async def startup_event():
         logging.info("Starting Gemini proxy server...")
         
         # Check if credentials exist
-        import os
-        from .config import CREDENTIAL_FILE
-        
-        env_creds_json = os.getenv("GEMINI_CREDENTIALS")
+        env_creds_json = settings.GEMINI_CREDENTIALS
         creds_file_exists = os.path.exists(CREDENTIAL_FILE)
         
         if env_creds_json or creds_file_exists:
