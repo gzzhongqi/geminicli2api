@@ -103,7 +103,7 @@ async def send_gemini_request(payload: dict, is_streaming: bool = False) -> Resp
             max_attempts=UPSTREAM_MAX_ATTEMPTS,
             base_delay_s=UPSTREAM_BACKOFF_BASE_S,
             max_delay_s=UPSTREAM_BACKOFF_MAX_S,
-            retryable_status_codes=frozenset({429, 500, 502, 503, 504}),
+            retryable_status_codes=frozenset({500, 502, 503, 504}),
         )
 
         if is_streaming:

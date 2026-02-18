@@ -478,7 +478,7 @@ async def onboard_user(creds, project_id):
             max_attempts=UPSTREAM_MAX_ATTEMPTS,
             base_delay_s=UPSTREAM_BACKOFF_BASE_S,
             max_delay_s=UPSTREAM_BACKOFF_MAX_S,
-            retryable_status_codes=frozenset({429, 500, 502, 503, 504}),
+            retryable_status_codes=frozenset({500, 502, 503, 504}),
         )
         timeout = httpx.Timeout(timeout=None, connect=UPSTREAM_CONNECT_TIMEOUT_S, read=UPSTREAM_READ_TIMEOUT_S)
         resp = await post_with_retry(
@@ -619,7 +619,7 @@ async def get_user_project_id(creds):
             max_attempts=UPSTREAM_MAX_ATTEMPTS,
             base_delay_s=UPSTREAM_BACKOFF_BASE_S,
             max_delay_s=UPSTREAM_BACKOFF_MAX_S,
-            retryable_status_codes=frozenset({429, 500, 502, 503, 504}),
+            retryable_status_codes=frozenset({500, 502, 503, 504}),
         )
         timeout = httpx.Timeout(timeout=None, connect=UPSTREAM_CONNECT_TIMEOUT_S, read=UPSTREAM_READ_TIMEOUT_S)
         resp = await post_with_retry(
