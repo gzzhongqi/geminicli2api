@@ -61,7 +61,7 @@ async def openai_chat_completions(
         # Handle streaming response
         async def openai_stream_generator():
             try:
-                response = send_gemini_request(gemini_payload, is_streaming=True)
+                response = await send_gemini_request(gemini_payload, is_streaming=True)
                 
                 if isinstance(response, StreamingResponse):
                     response_id = "chatcmpl-" + str(uuid.uuid4())
@@ -161,7 +161,7 @@ async def openai_chat_completions(
     else:
         # Handle non-streaming response
         try:
-            response = send_gemini_request(gemini_payload, is_streaming=False)
+            response = await send_gemini_request(gemini_payload, is_streaming=False)
             
             if isinstance(response, Response) and response.status_code != 200:
                 # Handle error responses from Google API
@@ -301,5 +301,4 @@ async def openai_list_models(username: str = Depends(authenticate_user)):
             status_code=500,
             media_type="application/json"
         )
-
 

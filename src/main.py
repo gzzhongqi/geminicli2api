@@ -5,16 +5,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from .gemini_routes import router as gemini_router
 from .openai_routes import router as openai_router
 from .auth import get_credentials, get_user_project_id, onboard_user
-
-# Load environment variables from .env file
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-    logging.info("Environment variables loaded from .env file")
-except ImportError:
-    logging.warning("python-dotenv not installed, .env file will not be loaded automatically")
-except Exception as e:
-    logging.warning(f"Could not load .env file: {e}")
+from .http_client import close_http_client
+from .config import settings, CREDENTIAL_FILE
 
 # Configure logging
 logging.basicConfig(
@@ -39,10 +31,7 @@ async def startup_event():
         logging.info("Starting Gemini proxy server...")
         
         # Check if credentials exist
-        import os
-        from .config import CREDENTIAL_FILE
-        
-        env_creds_json = os.getenv("GEMINI_CREDENTIALS")
+        env_creds_json = settings.GEMINI_CREDENTIALS
         creds_file_exists = os.path.exists(CREDENTIAL_FILE)
         
         if env_creds_json or creds_file_exists:
@@ -51,9 +40,9 @@ async def startup_event():
                 creds = get_credentials(allow_oauth_flow=False)
                 if creds:
                     try:
-                        proj_id = get_user_project_id(creds)
+                        proj_id = await get_user_project_id(creds)
                         if proj_id:
-                            onboard_user(creds, proj_id)
+                            await onboard_user(creds, proj_id)
                             logging.info(f"Successfully onboarded with project ID: {proj_id}")
                         logging.info("Gemini proxy server started successfully")
                         logging.info("Authentication required - Password: see .env file")
@@ -72,9 +61,9 @@ async def startup_event():
                 creds = get_credentials(allow_oauth_flow=True)
                 if creds:
                     try:
-                        proj_id = get_user_project_id(creds)
+                        proj_id = await get_user_project_id(creds)
                         if proj_id:
-                            onboard_user(creds, proj_id)
+                            await onboard_user(creds, proj_id)
                             logging.info(f"Successfully onboarded with project ID: {proj_id}")
                         logging.info("Gemini proxy server started successfully")
                     except Exception as e:
@@ -91,6 +80,10 @@ async def startup_event():
     except Exception as e:
         logging.error(f"Startup error: {str(e)}")
         logging.warning("Server may not function properly.")
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    await close_http_client()
 
 @app.options("/{full_path:path}")
 async def handle_preflight(request: Request, full_path: str):

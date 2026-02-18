@@ -4,12 +4,15 @@ This module is used by both OpenAI compatibility layer and native Gemini endpoin
 """
 import json
 import logging
-import requests
 from fastapi import Response
 from fastapi.responses import StreamingResponse
 from google.auth.transport.requests import Request as GoogleAuthRequest
+import httpx
+from typing import Optional
 
 from .auth import get_credentials, save_credentials, get_user_project_id, onboard_user
+from .http_client import get_http_client
+from .http_retry import RetryConfig, post_with_retry, retry_after_seconds, sleep_before_retry
 from .utils import get_user_agent
 from .config import (
     CODE_ASSIST_ENDPOINT,
@@ -17,12 +20,18 @@ from .config import (
     get_base_model_name,
     is_search_model,
     get_thinking_budget,
-    should_include_thoughts
+    should_include_thoughts,
+    UPSTREAM_CONNECT_TIMEOUT_S,
+    UPSTREAM_READ_TIMEOUT_S,
+    UPSTREAM_STREAM_READ_TIMEOUT_S,
+    UPSTREAM_MAX_ATTEMPTS,
+    UPSTREAM_BACKOFF_BASE_S,
+    UPSTREAM_BACKOFF_MAX_S,
 )
 import asyncio
 
 
-def send_gemini_request(payload: dict, is_streaming: bool = False) -> Response:
+async def send_gemini_request(payload: dict, is_streaming: bool = False) -> Response:
     """
     Send a request to Google's Gemini API.
     
@@ -59,11 +68,11 @@ def send_gemini_request(payload: dict, is_streaming: bool = False) -> Response:
         )
 
     # Get project ID and onboard user
-    proj_id = get_user_project_id(creds)
+    proj_id = await get_user_project_id(creds)
     if not proj_id:
         return Response(content="Failed to get user project ID.", status_code=500)
     
-    onboard_user(creds, proj_id)
+    await onboard_user(creds, proj_id)
 
     # Build the final payload with project info
     final_payload = {
@@ -89,17 +98,37 @@ def send_gemini_request(payload: dict, is_streaming: bool = False) -> Response:
 
     # Send the request
     try:
+        client = get_http_client()
+        retry_cfg = RetryConfig(
+            max_attempts=UPSTREAM_MAX_ATTEMPTS,
+            base_delay_s=UPSTREAM_BACKOFF_BASE_S,
+            max_delay_s=UPSTREAM_BACKOFF_MAX_S,
+            retryable_status_codes=frozenset({500, 502, 503, 504}),
+        )
+
         if is_streaming:
-            resp = requests.post(target_url, data=final_post_data, headers=request_headers, stream=True)
-            return _handle_streaming_response(resp)
-        else:
-            resp = requests.post(target_url, data=final_post_data, headers=request_headers)
-            return _handle_non_streaming_response(resp)
-    except requests.exceptions.RequestException as e:
+            return _handle_streaming_response(
+                client=client,
+                target_url=target_url,
+                request_headers=request_headers,
+                final_post_data=final_post_data,
+                retry_cfg=retry_cfg,
+            )
+        timeout = httpx.Timeout(timeout=None, connect=UPSTREAM_CONNECT_TIMEOUT_S, read=UPSTREAM_READ_TIMEOUT_S)
+        resp = await post_with_retry(
+            client,
+            target_url,
+            headers=request_headers,
+            content=final_post_data,
+            timeout=timeout,
+            retry_config=retry_cfg,
+        )
+        return _handle_non_streaming_response(resp)
+    except httpx.RequestError as e:
         logging.error(f"Request to Google API failed: {str(e)}")
         return Response(
             content=json.dumps({"error": {"message": f"Request failed: {str(e)}"}}),
-            status_code=500,
+            status_code=502,
             media_type="application/json"
         )
     except Exception as e:
@@ -111,84 +140,121 @@ def send_gemini_request(payload: dict, is_streaming: bool = False) -> Response:
         )
 
 
-def _handle_streaming_response(resp) -> StreamingResponse:
+def _handle_streaming_response(
+    *,
+    client: httpx.AsyncClient,
+    target_url: str,
+    request_headers: dict,
+    final_post_data: str,
+    retry_cfg: RetryConfig,
+) -> StreamingResponse:
     """Handle streaming response from Google API."""
-    
-    # Check for HTTP errors before starting to stream
-    if resp.status_code != 200:
-        logging.error(f"Google API returned status {resp.status_code}: {resp.text}")
-        error_message = f"Google API error: {resp.status_code}"
-        try:
-            error_data = resp.json()
-            if "error" in error_data:
-                error_message = error_data["error"].get("message", error_message)
-        except:
-            pass
-        
-        # Return error as a streaming response
-        async def error_generator():
-            error_response = {
-                "error": {
-                    "message": error_message,
-                    "type": "invalid_request_error" if resp.status_code == 404 else "api_error",
-                    "code": resp.status_code
-                }
-            }
-            yield f'data: {json.dumps(error_response)}\n\n'.encode('utf-8')
-        
-        response_headers = {
-            "Content-Type": "text/event-stream",
-            "Content-Disposition": "attachment",
-            "Vary": "Origin, X-Origin, Referer",
-            "X-XSS-Protection": "0",
-            "X-Frame-Options": "SAMEORIGIN",
-            "X-Content-Type-Options": "nosniff",
-            "Server": "ESF"
-        }
-        
-        return StreamingResponse(
-            error_generator(),
-            media_type="text/event-stream",
-            headers=response_headers,
-            status_code=resp.status_code
-        )
-    
+
     async def stream_generator():
+        started = False
         try:
-            with resp:
-                for chunk in resp.iter_lines():
-                    if chunk:
-                        if not isinstance(chunk, str):
-                            chunk = chunk.decode('utf-8', "ignore")
-                            
-                        if chunk.startswith('data: '):
-                            chunk = chunk[len('data: '):]
-                            
+            stream_read_timeout_s = UPSTREAM_STREAM_READ_TIMEOUT_S
+            timeout = httpx.Timeout(
+                timeout=None,
+                connect=UPSTREAM_CONNECT_TIMEOUT_S,
+                read=stream_read_timeout_s,
+            )
+
+            last_exc: Optional[Exception] = None
+            for attempt in range(1, retry_cfg.max_attempts + 1):
+                try:
+                    async with client.stream(
+                        "POST",
+                        target_url,
+                        headers=request_headers,
+                        content=final_post_data,
+                        timeout=timeout,
+                    ) as resp:
+                        if resp.status_code != 200:
+                            body_text = ""
+                            try:
+                                body_text = await resp.aread()
+                                if isinstance(body_text, (bytes, bytearray)):
+                                    body_text = body_text.decode("utf-8", "ignore")
+                            except Exception:
+                                body_text = ""
+
+                            logging.error(f"Google API returned status {resp.status_code}: {body_text}")
+                            error_message = f"Google API error: {resp.status_code}"
+                            try:
+                                error_data = json.loads(body_text) if body_text else {}
+                                if "error" in error_data:
+                                    error_message = error_data["error"].get("message", error_message)
+                            except Exception:
+                                pass
+
+                            if resp.status_code in retry_cfg.retryable_status_codes and attempt < retry_cfg.max_attempts:
+                                retry_after_s = retry_after_seconds(resp.headers)
+                                await sleep_before_retry(
+                                    attempt=attempt + 1,
+                                    config=retry_cfg,
+                                    retry_after_s=retry_after_s,
+                                    reason=f"status={resp.status_code}",
+                                )
+                                continue
+
+                            error_response = {
+                                "error": {
+                                    "message": error_message,
+                                    "type": "invalid_request_error" if resp.status_code == 404 else "api_error",
+                                    "code": resp.status_code,
+                                }
+                            }
+                            yield f"data: {json.dumps(error_response)}\n\n".encode("utf-8")
+                            return
+
+                        async for line in resp.aiter_lines():
+                            if not line:
+                                continue
+                            if not isinstance(line, str):
+                                line = line.decode("utf-8", "ignore")
+                            if not line.startswith("data: "):
+                                continue
+                            chunk = line[len("data: ") :]
                             try:
                                 obj = json.loads(chunk)
-                                
                                 if "response" in obj:
                                     response_chunk = obj["response"]
-                                    response_json = json.dumps(response_chunk, separators=(',', ':'))
-                                    response_line = f"data: {response_json}\n\n"
-                                    yield response_line.encode('utf-8', "ignore")
+                                    response_json = json.dumps(response_chunk, separators=(",", ":"))
+                                    yield f"data: {response_json}\n\n".encode("utf-8", "ignore")
+                                    started = True
                                     await asyncio.sleep(0)
                                 else:
-                                    obj_json = json.dumps(obj, separators=(',', ':'))
-                                    yield f"data: {obj_json}\n\n".encode('utf-8', "ignore")
+                                    obj_json = json.dumps(obj, separators=(",", ":"))
+                                    yield f"data: {obj_json}\n\n".encode("utf-8", "ignore")
+                                    started = True
                             except json.JSONDecodeError:
                                 continue
-                
-        except requests.exceptions.RequestException as e:
+                        return
+                except httpx.RequestError as e:
+                    last_exc = e
+                    if started or attempt >= retry_cfg.max_attempts:
+                        raise
+                    await sleep_before_retry(
+                        attempt=attempt + 1,
+                        config=retry_cfg,
+                        retry_after_s=None,
+                        reason=f"{type(e).__name__}: {e}",
+                    )
+                    continue
+            if last_exc:
+                raise last_exc
+            raise RuntimeError("Streaming request exhausted without response")
+        except httpx.RequestError as e:
             logging.error(f"Streaming request failed: {str(e)}")
             error_response = {
                 "error": {
                     "message": f"Upstream request failed: {str(e)}",
                     "type": "api_error",
-                    "code": 502
+                    "code": 502,
                 }
             }
-            yield f'data: {json.dumps(error_response)}\n\n'.encode('utf-8', "ignore")
+            yield f"data: {json.dumps(error_response)}\n\n".encode("utf-8", "ignore")
         except Exception as e:
             logging.error(f"Unexpected error during streaming: {str(e)}")
             error_response = {
@@ -217,7 +283,7 @@ def _handle_streaming_response(resp) -> StreamingResponse:
     )
 
 
-def _handle_non_streaming_response(resp) -> Response:
+def _handle_non_streaming_response(resp: httpx.Response) -> Response:
     """Handle non-streaming response from Google API."""
     if resp.status_code == 200:
         try:
